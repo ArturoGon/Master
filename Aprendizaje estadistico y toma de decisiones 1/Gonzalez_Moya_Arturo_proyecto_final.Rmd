@@ -1,0 +1,286 @@
+---
+title: "Trabajo final"
+author: "Arturo González Moya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+    number_sections: yes
+    fig_width: 5
+    fig_height: 3.5
+  word_document:
+    toc: yes
+    fig_width: 5
+    fig_height: 3.5
+  html_document:
+    toc: yes
+    fig_width: 5
+    fig_height: 3.5
+    number_sections: yes
+linkcolor: red
+header-includes: \renewcommand{\contentsname}{Contenidos}
+citecolor: blue
+toccolor: blue
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("nycflights13")
+library("tidyverse")
+library("MASS")
+library("margins")
+library("ISLR")
+library("caret")
+library("randomForest")
+library("gbm")
+library("MLmetrics")
+library("rpart")
+library("rpart.plot")
+```
+
+
+# Introducción
+
+En este trabajo realizaremos el estudio de diferentes modelos de predicción sobre los datos de la librería "nycflights13", que contiene la información de los diferentes vuelos que han salido de los aeropuertos de Nueva York en el año 2013.
+
+# Carga de datos
+
+Lo primero que haremos será cargar las tablas que contienen la información de los vuelos y las que contienen la información del tiempo.
+
+```{r} 
+#Trata de datos
+vuelos = nycflights13::flights
+tiempo = nycflights13::weather
+
+tabla= inner_join(vuelos, tiempo)
+```
+
+Lo que intentaremos predecir será el retraso que sufren los vuelos con respecto al tiempo que hay en Nueva York. Para ello, las variables que utilizaremos son:
+
+  * dep_delay : Esta variable contiene el tiempo que el vuelo retrasó su salida en minutos.
+  
+  * temp: Es la temperatura (en grados fahrenheit).
+  
+  * dewp: Es la temperatura a la que debe enfriarse el aire a una presión constante para que se sature de vapor de agua y este se condense (en grados fahrenheit).
+  
+  * humid: Humedad relativa.
+  
+  * wind_dir: Dirección del viento (en grados).
+  
+  * wind_speed: Velocidad del viento (en millas por hora).
+  
+  * wind_gust: Velocidad de ráfaga (en millas por hora).
+  
+  * precip: Precipitaciones (en pulgadas).
+  
+  * pressure: Presión a nivel de mar (en milibares).
+  
+  * visib: Visibilidad (en millas).
+
+
+```{r}
+head(tabla)
+```
+
+Como podemos obervar, en la variable "wind_gust" hay una gran cantidad de valores NA, por lo que eliminaremos esta columna de nuestro conjunto de datos para evitar problemas.
+
+
+```{r}
+tabla = subset(tabla, select = -c(wind_gust) )
+```
+
+Veamos ahora si hay algún dato perdido en la tabla.
+
+```{r}
+#Ver cuantos NA hay y eliminarlos
+
+anyNA(tabla)
+table(is.na(tabla))
+mean(is.na(tabla))
+```
+
+Como no hay muchos valores NA en comparación con los datos que tenemos, lo que haremos será eliminarlos directamente.
+
+```{r}
+tabla=na.omit(tabla)
+```
+
+Ahora que ya tenemos los datos limpios, veamos cuantas observaciones poseemos.
+
+```{r}
+dim(tabla)
+```
+
+Tenemos 284550 observaciones con las que hacer nuestra predicción. Como son tantas, lo que haremos será separar en dos conjuntos, uno que sea el de entrenamiento de los modelos y otro que sea el de test de los modelos de predicción.
+
+```{r}
+set.seed(12345)
+train = sample(1:nrow(tabla), round(nrow(tabla)*0.75,0), replace = FALSE)
+entrenamiento = tabla[train, ]
+test= tabla[-train, ]
+```
+
+# Métodos de clasificación
+
+## Modelo lineal
+
+Comenzaremos con el modelo más fácil que podemos realizar, el modelo lineal.
+
+```{r}
+# modelo lineal
+lm.fit=lm(dep_delay ~ temp + dewp + humid + wind_dir + wind_speed + precip + pressure + visib,
+            data=entrenamiento)
+
+lm.pred=predict(lm.fit,newdata=test) 
+
+rmse_lm= sqrt(MSE(y_pred = lm.pred, y_true = test$dep_delay))
+```
+
+Como nuestra variable dependiente (que es "dep_delay") es cuantitativa, lo que utilizaremos para ver la efectividad del modelo será la raiz cuadrada del error cuadrático medio (RMSE). El RMSE de la predicción con el modelo lineal es `r rmse_lm`.
+
+```{r}
+summary(lm.fit)
+```
+
+Mirando los coeficientes de la regresión, vemos que todas las variables son muy significativas a la hora de estimar el retraso de los vuelos.
+
+
+# Métodos basados en arboles
+
+## Arboles aleatorios
+
+Pasamos ahora a estudiar los metodos basados en arboles y comenzamos con el arbol aleatorio. Lo realizaremos con las mismas variables independientes que hemos escogido anteriormente y ya el arbol eliminará las que no sean necesarias.
+
+```{r}
+#Metodo de arboles 
+tree.vuelos=rpart(dep_delay ~ temp + dewp + humid + wind_dir + wind_speed + precip + pressure + visib,
+                    data=entrenamiento)
+
+rpart.plot(tree.vuelos, type = 3, clip.right.labs = FALSE, branch = .3, under = TRUE)
+```
+Aquí vemos que la única variable que utiliza el arbol para predecir el retraso de los vuelos es la variable "dewp". Veamos ahora el error que comete en la predicción.
+
+```{r}
+tree.pred=predict(tree.vuelos,test)
+rmse_arbol = with(test,sqrt(MSE(tree.pred,dep_delay)))
+```
+
+Vemos que el RMSE del arbol aleatorio es `r rmse_arbol` que es practicamente el mismo que el de la regesión lineal (que era de `r rmse_lm`)
+
+## GBM
+
+Lo primero que haremos será selecciona los parametros de control y los parametros de grid.
+
+```{r}  
+# GBM mediante CV
+
+Control <- trainControl(method = 'cv', number = 5, summaryFunction=defaultSummary)
+
+gbm_Grid <-  expand.grid(interaction.depth = c(1,4,6,8),
+                        n.trees = c(500,1000,1500),
+                        shrinkage = c(.005, .02,.05),
+                        n.minobsinnode = 10)
+```
+
+Pasamos ahora a realizar boosting con los parametros anteriormente escogidos. Ya que tenemos más de 280000 observaciones, lo que haremos será reducir la muestra para poder realizar los métodos de GBM y RF.
+
+```{r}
+set.seed(12345)
+subconjunto = sample(1:nrow(tabla), round(nrow(tabla)*0.05,0), replace = FALSE)
+subtabla = tabla[subconjunto, ]
+sub_train = sample(1:nrow(subtabla), round(nrow(subtabla)*0.7,0), replace = FALSE)
+sub_entrenamiento = tabla[sub_train, ]
+sub_test= tabla[-sub_train, ]
+```
+
+Se han seleccionado, de manera aleatoria, un 5% de los datos que teniamos inicialmente, que son aproximadamente unas 14000 observaciones.
+
+```{r, results = "hide"}  
+## GBM
+fit.gbm <- train(dep_delay ~ temp + dewp + humid + wind_dir + wind_speed + precip + pressure + visib,
+                 data=sub_entrenamiento, 
+                 method = "gbm", 
+                 trControl=Control, 
+                 tuneGrid=gbm_Grid,
+                 metric="RMSE",
+                 distribution="gaussian")
+
+```
+
+Veamos cual es el mejor modelo obtenido mediante boosting.
+
+```{r}
+fit.gbm
+```
+
+El modelo que seleccionamos es el que tiene 500 arboles, una profundidad de interacción de 6 y un parametro de contracción de 0.005. Si dibujamos lo obtenido al hacer el boosting tenemos lo siguiente.
+
+```{r}  
+plot(fit.gbm)
+```
+
+Calculamos ahora cual es el RMSE del modelo con los datos de entrenamiento.
+
+```{r}
+res_gbm <- fit.gbm$results
+rmse_gbm <- subset(res_gbm[5])
+# CV con mejor "tune"
+rmse_train_gmb = min(rmse_gbm)
+# 33.47961
+```
+
+Vemos que es de `r rmse_train_gmb`. Pasamos a realizar la predicción y ver su RMSE.
+
+```{r}
+boost_pred <- predict(fit.gbm,sub_test)
+rmse_test_gbm = sqrt(MSE(y_pred = boost_pred, y_true = sub_test$dep_delay))
+#37.74465
+```
+
+El RMSE es `r rmse_test_gbm` que es mayor que el obtenido con la regresión lineal y con el arbol aleatorio. Esto se debe a que hemos reducido el número de observaciones considerablemente. 
+
+## Random Forest
+
+El siguiente método que vamos a utilizar es el bosque aleatorio. El parametro "mtry" más grande es 8 ya que es el número máximo de variables que utilizamos para predecir el retraso en los vuelos.
+
+```{r}  
+#mtry. max = 8 ya que son 8 variables
+rf_Grid <-  expand.grid(mtry = c(1,2,3,4,5,6,8))
+```
+
+Vamos a realizar el bosque y a comentar los resultados. Para este caso también utilizaremos una muestra reducida del total de los datos.
+
+```{r}  
+## RANDOM FOREST ##
+fit.rf_total <- train(dep_delay ~ temp + dewp + humid + wind_dir + wind_speed + precip + pressure + visib,
+                      data=sub_entrenamiento,
+                      method = "rf",
+                      trControl=Control, 
+                      tuneGrid=rf_Grid, 
+                      metric="RMSE",
+                      distribution="gaussian")
+fit.rf_total
+res_rf_total <- fit.rf_total$results
+rmse_rf_total <- subset(res_rf_total[2]) 
+
+# CV con mejor "tune" 
+rmse_train_rf= min(rmse_rf_total)
+#33.28521
+```
+
+El mejor bosque es con el parámetro "mtry" igual a 1. El RMSE con los datos de entrenamiento es `r rmse_train_rf`. Vemos que este error es algo menor que el obtenido con los datos de entrenamiento en boosting.
+
+```{r}
+rf_pred <- predict(fit.rf_total,sub_test)
+rmse_test_rf = sqrt(MSE(y_pred = rf_pred, y_true = sub_test$dep_delay))
+#37.78956
+```
+
+El RMSE de la predicción es `r rmse_test_rf` que es casi igual al obtenido con la predicción de boosting. Este error no es fiable ya que hemos reducido la muestra considerablemente. 
+
+
+# Conclusión
+
+Por lo que hemos visto, el mejor modelo para predecir el retraso será el del arbol aleatorio ya que su RMSE no es muy diferente al del modelo lineal pero este utiliza menos varibales. De todas formas, no podemos descartar los modelos de boosting y random forest ya que no hemos podido realizarlos con todos los datos. Si comparamos el RMSE de los modelos con la media del retraso en los vuelos, vemos que el RMSE es mucho mayor que la media en los retrasos, por lo que las predicciones no serán muy buenas. 
+
