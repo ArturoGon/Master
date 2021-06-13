@@ -1,0 +1,866 @@
+---
+title: "Entrega Clasificación SVM"
+author: "Arturo Gonzalez Moya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: yes
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(gplots)
+library(ROCR)
+library(VIM)
+library(e1071)
+library(unbalanced)
+library(kernlab)
+library(ROSE)
+library(caret)
+library(knitr)
+library(moments)
+library(corrplot)
+library(fastDummies)
+library(plyr)
+library(class)
+library(rpart)
+library(randomForest)
+library(nnet)
+```
+
+# Enunciado
+
+Se considera la base de datos *"bank-full.csv".* Los datos están relacionados con una campaña de marketing directo de una institución bancaria portuguesa. Las campañas de marketing se basaban en llamadas telefónicas. A menudo, se requería más de un contacto con el mismo cliente, para saber si el producto (depósito bancario a plazo) sería ("sí") o no ("no") suscrito. La descripción de la base de datos se puede encontrar en el fichero *"bank-names.txt".* Observar bien la descripción de los datos ya que pueden existir variables que no son útiles para nuestro estudio. Se trata de resolver un problema de clasificación usando SVMs sobre el fichero *"bank_full"* y siguiendo los pasos descritos en las clases. Debéis desarrollar un estudio que incluya, al menos, los siguientes puntos:
+
+ * Exploración de datos - valores desaparecidos, valores atípicos
+ 
+ * Visualización de datos
+
+ * Matriz de correlaciones
+
+ * Partición de los datos 70:30 (librería “Caret” si se usa R)
+
+ * Paquete "e1071" o “Kernlab” (si se usa R)
+
+ * Ajuste del modelo y Plots
+
+ * Matriz de confusión
+
+# Introducción
+
+La base de datos “bank_full” es la base de datos de una campaña de marketing directo de una institución bancaria portuguesa. Las campañas de marketing se basaban en llamadas telefónicas. A menudo, se requería más de un contacto con el mismo cliente, para saber si el producto (depósito bancario a plazo) sería ('sí') o no ('no') suscrito. Esta base de datos se puede encontrar en el [Repositorio UCI de aprendizaje automático](https://archive.ics.uci.edu/ml/datasets/Bank+Marketing). El  objetivo es saber si podemos predecir si un individuo se suscribirá a un depósito bancario a plazo o no. Abordaremos el problema utilizando maquinas de soporte vectorial.
+
+# Exploración y limpieza de los datos
+
+Comenzamos la exploración de los datos. Lo primero que haremos será cargar el fichero de datos. *bank_full.csv*.
+
+```{r}
+datos_banco <- read.csv("bank-full.csv", sep = ";")
+
+dim(datos_banco)
+
+summary(datos_banco)
+```
+
+Este conjunto de datos tiene $45211$ observaciones y $17$ variables que son las siguientes:
+
+  * **age**: Edad del cliente (variable numérica).
+  
+  * **job**: Tipo de trabajo (variable categórica). Las categorias son: *admin.*, *unknown*, *services*, *unemployed*, *management*, *housemaid*, *entrepreneur*, *student*, *blue-collar*, *self-employed*, *retired* y *technician*.
+  
+  * **marital**: Estado civil (variable categórica). Las categorias son: *married*, *divorced* y *single*.
+  
+  * **education**: Nivel de eduación (variable categórica). Las categorias son: *unknown*, *secondary*, *primary* y *tertiary*.
+  
+  * **default**: Variable binaria que indica si el cliente tiene crédito en mora.
+  
+  * **balance**: Balance medio anual, en euros (variable numérica).
+  
+  * **housing**: Variable binaria que indica si el cliente tiene un prestamo para la vivienda.
+  
+  * **loan**: Variable binaria que indica si el cliente tiene un préstamo personal.
+  
+  * **contact**: Tipo de contacto (variable categórica). Las categorias son: *unknown*, *telephone* y *cellular*.
+  
+  * **day**: Día del último contacto del mes (variable numérica).
+  
+  * **month**: Mes del último contacto del año (variable categórica). Las categorias son: *jan*, *feb*, *mar*, *apr*, *may*, *jun*, *jul*, *aug*, *sep*, *oct*, *nov* y *dec*.
+  
+  * **duration**: Duración del último contacto, en segundos (variable numérica).
+  
+  * **campaign**: Número de contactos realizados durante esta campaña y para este cliente (variable numérica).
+  
+  * **pdays**: Número de días que pasaron después de que el cliente fue contactado por última vez desde una campaña anterior (variable numérica). Si aparece un $-1$ es que el cliente no fue contactado previamente.
+  
+  * **previous**: Número de contactos realizados antes de esta campaña y para este cliente (variable numérica).
+  
+  * **poutcome**: Resultado de la campaña de marketing anterior (variable categórica). Las categorias son: *unknown*, *other*, *failure* y *success*.
+
+  * **y**: Variable categórica objetivo que nos indica si un cliente se ha subscrito a un deposito a plazo.
+
+Para este estudio, no tendremos en cuenta las variables **pdays** y **poutcome** ya que no corresponden a la misma campaña y la variable **default** ya que si tiene un crédito que pagar, no se suscribirá a al depósito.
+
+```{r}
+datos_banco$pdays<-NULL
+datos_banco$poutcome<-NULL
+datos_banco$default<-NULL
+```
+
+
+## Análisis exploratorio de los datos
+
+Veamos primero si exiten valores perdido en el conjunto de datos.
+
+```{r}
+anyNA(datos_banco)
+```
+
+Podemos observar que no. Además, antes hemos visto que ningúna variable categórica tiene tampoco valores perdidos.
+
+Un problema que tenemos es que la variable **month** tiene muchos niveles. Lo que haremos será agruparlos en trimestres.
+
+```{r}
+summary(datos_banco$month)
+```
+
+```{r}
+datos_banco$month <- gsub('^jan', 'First_Trim', datos_banco$month)
+datos_banco$month <- gsub('^feb', 'First_Trim', datos_banco$month)
+datos_banco$month <- gsub('^mar', 'First_Trim', datos_banco$month)
+datos_banco$month <- gsub('^apr', 'Second_Trim', datos_banco$month)
+datos_banco$month <- gsub('^may', 'Second_Trim', datos_banco$month)
+datos_banco$month <- gsub('^jun', 'Second_Trim', datos_banco$month)
+datos_banco$month <- gsub('^jul', 'Third_Trim', datos_banco$month)
+datos_banco$month <- gsub('^aug', 'Third_Trim', datos_banco$month)
+datos_banco$month <- gsub('^sep', 'Third_Trim', datos_banco$month)
+datos_banco$month <- gsub('^oct', 'Fourth_Trim', datos_banco$month)
+datos_banco$month <- gsub('^nov', 'Fourth_Trim', datos_banco$month)
+datos_banco$month <- gsub('^dec', 'Fourth_Trim', datos_banco$month)
+
+datos_banco$month <- as.factor(datos_banco$month)
+```
+
+```{r}
+summary(datos_banco$month)
+```
+
+En el caso de la variable **job** podemos observar que, al igual que la variable **month**, tiene muchos niveles.
+
+```{r}
+summary(datos_banco$job)
+```
+
+Lo que haremos será agrupar en 5 niveles. que seran los siguientes:
+
+  * white-collar: admin., entrepreneur, management, technician
+  
+  * blue-collar
+  
+  * services
+  
+  * not_work: student, retired, unemployed
+  
+  * other/unknown: housemaid, self-employed, unknown
+
+```{r}
+datos_banco$job <- gsub('^admin.', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^entrepreneur', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^management', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^technician', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^student', 'not_work', datos_banco$job)
+datos_banco$job <- gsub('^retired', 'not_work', datos_banco$job)
+datos_banco$job <- gsub('^unemployed', 'not_work', datos_banco$job)
+datos_banco$job <- gsub('^housemaid', 'other_unknown', datos_banco$job)
+datos_banco$job <- gsub('^self-employed', 'other_unknown', datos_banco$job)
+datos_banco$job <- gsub('^unknown', 'other_unknown', datos_banco$job)
+
+datos_banco$job <- as.factor(datos_banco$job)
+```
+
+### Visualización de los datos
+
+Comenzamos haciendo un recuento de la variable **age** (que es una variable numérica) con respecto a la variable **y** que es la que queremos predecir. Por lo tanto, haremos un histograma.
+
+```{r}
+ggplot(datos_banco) + 
+  aes(x=as.numeric(age), group=y, fill=y) + 
+  geom_histogram(binwidth=1, color='black')+
+  xlab("Edad") +
+  ylab("Valor") + 
+  ggtitle("Recuento por edad de si aceptan o no el depósito")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que la mayoría de los individuos no se suscriben al deposito bancario a plazo. Además, los que más se suscriben se encuentran entre las edades de 25 a 60 años. Vemos que las personas con edad entre 30 y 40 años son a las que más se les ha ofrecido el deposito a plazo.
+
+Ya que el banco esta ofreciendo un deposito a plazo, se puede intuir que las personas jovenes se suscribirán más a este deposito que las personas mayores. Veámoslo con un boxplot.
+
+```{r}
+ggplot(datos_banco) + 
+  aes(x= y, y= age, group=y, fill=y) + 
+  geom_boxplot(binwidth=1, color='black')+
+  xlab("Aceptan o no el deposito") +
+  ylab("Edad") + 
+  ggtitle("Boxplot de la edad con respecto a las personas que aceptan o no el depósito")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Para explorar la relación entre la clase de trabajo y si se suscriben al deposito a plazo, se calculan los recuentos en las dos categorías de suscripción en las cinco categorías de clase de trabajo, así como las proporciones dentro del grupo. Los resultados se representan como un diagrama de barras.
+
+```{r}
+recuento <- mutate(dplyr::summarise(group_by(datos_banco,job, y), count = n()))
+
+recuento <- ddply(recuento, .(job), transform, percent = count/sum(count) * 100)
+
+recuento <- ddply(recuento, .(job), transform, pos = (cumsum(count) - 0.5 * count))
+recuento$label <- paste0(sprintf("%.0f", recuento$percent), "%")
+
+ggplot(recuento, aes(x = job, y = count, fill = y)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5),size=3)+
+  xlab("Trabajo") +
+  ylab("Recuento") + 
+  ggtitle("Recuento de personas que aceptan o no el depósito según el trabajo")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que el porcentaje de los individuos que se suscriben al depósito es mayor en el grupo de los que no trabajan. El porcentaje de los individuos que menos se suscriben corresponde a los del grupo *blue-collar*.
+
+Pregunta: ¿La educación superior influye en la suscripción del depósito?
+
+Respuesta: Exploramos esta pregunta trazando la educación en función de la suscripción al depósito, como se muestra en la siguiente figura.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, fill = education))+
+  geom_bar( stat = "count")+
+  facet_wrap(~education)+
+  xlab("Aceptan o no el deposito") +
+  ylab("Recuento") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo del nivel de estudios")+
+  labs(fill="Nivel de estudios")
+```
+
+Podemos observar que, en proporción, las que tienen más nivel de estudios aceptan más el depósito a plazo. 
+
+Pasamos a obervar si existen diferencias entre los individuos dependiendo del estado civil y de tiene un préstamo para la vivienda.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, fill = housing))+
+  geom_bar( stat = "count")+
+  facet_wrap(~marital)+
+  xlab("Aceptan o no el deposito") +
+  ylab("Recuento") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo del estado civil y el préstamo en la vivienda")+
+  labs(fill="Préstamos en la vivienda")
+```
+
+Podemos ver que no existen difeencias muy significativas en los invididuos que aceptan o no el depósito dependiendo del estado civil. Recalcar que los individuos con un préstamo para la vivienda que rechazan el déposito son más que los que tienen un préstamo para la vivienda y aceptan el depósito.
+
+Pregunta: ¿La duración del último contacto influye en la suscripción del depósito?
+
+Respuesta: Exploramos esta pregunta dibujando la duración del último contacto en función de la suscripción al depósito, como se muestra en la siguiente figura.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, y = duration, fill = y))+
+  geom_boxplot()+
+  xlab("Aceptan o no el deposito") +
+  ylab("Duración del último contacto") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo de la duración del último contacto")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que para las personas que aceptan el depósito, la duración del último contacto es mayor que los que no aceptan. Ya que en esta variable encontramos una diferencía clara, lo que haremos será eliminar los outliers que se corresponden con un coeficiente de $3$ en el boxplot.
+
+```{r}
+## Para eliminar los outliers mas a adelante.
+p <- filter(datos_banco, y == "yes")
+a<-which(p$duration %in% boxplot.stats(p$duration, coef = 3)$out)
+q <- filter(datos_banco, y == "no")
+b<-which(q$duration %in% boxplot.stats(q$duration, coef = 3)$out)
+
+c<- union(a,b)
+```
+
+Pregunta: ¿El número de contactos realizados durante esta campaña y para este cliente influye en la suscripción del depósito?
+
+Respuesta: Exploramos esta pregunta graficando el número de contactos realizados para cada cliente en esta campaña en función de la suscripción al depósito, como se muestra en la siguiente figura.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, y = campaign, fill = y))+
+  geom_boxplot()+
+  xlab("Aceptan o no el deposito") +
+  ylab("Número de contactos en esta campaña a cada cliente") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo del número de contactos esta campaña")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Vemos que no existen diferencias claras entre los individuos que se suscriben o no al depósito.
+
+Estudiemos ahora si el trimestre en el que se tuvo el último contacto con el cliente tiene relación con su suscripción al depósito.
+
+```{r}
+recuento <- mutate(dplyr::summarise(group_by(datos_banco,month, y), count = n()))
+
+recuento <- ddply(recuento, .(month), transform, percent = count/sum(count) * 100)
+
+recuento <- ddply(recuento, .(month), transform, pos = (cumsum(count) - 0.5 * count))
+recuento$label <- paste0(sprintf("%.0f", recuento$percent), "%")
+
+ggplot(recuento, aes(x = month, y = count, fill = y)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5),size=3)+
+  xlab("Trimestre") +
+  ylab("Recuento") + 
+  ggtitle("Recuento de personas que aceptan o no el depósito según el triemestre en el que las contactaron")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que en el segundo trimestre es cuando más contactos a clientes se realizaron. En el primer y cuarto trimestre se dan los porcentajes más altos de gente que se suscribe al depósito.
+
+### Detectando "outliers" y variables "skewed" (asimétricas)
+
+Una forma de estudiar la existencia de variables asimétricas es utilizando algún índice de asimetría como el determinado por la función skewness(). Una variable se considera "muy asimétrica" si su valor absoluto es mayor que 1. Se considera una variable, "moderately skewed" si su valor absoluto es mayor que 0.5.
+
+```{r}
+skewedVars<- NA
+for(i in names(datos_banco)){
+   if(is.numeric(datos_banco[,i])){
+     if(i != "y"){
+       # Enters this block if variable is non-categorical
+       skewVal <- skewness(datos_banco[,i])
+       print(paste(i, skewVal, sep = ": "))
+       if(abs(skewVal) > 1){
+         skewedVars <- c(skewedVars, i)
+       }
+     }
+   }
+}
+skewedVars
+```
+
+En nuestro caso, podemos observar que las variables *balance*, *duration*, *campaign* y *previous* son muy asimétricas. Lo que haremos por lo tanto será eliminar todas las mencionadas menos *duration*, a la que le eliminaremos los outliers ya que vimos que podía ser relevante en el estudio.
+
+```{r}
+datos_banco$balance <- NULL
+datos_banco$previous <- NULL
+datos_banco$campaign <- NULL
+
+datos_banco <- datos_banco[-c,] #Eliminamos los outliers de duration
+```
+
+Hemos eliminado el siguiente número de outliers.
+
+```{r}
+length(c)
+```
+
+También eliminaremos la variable *contact* ya que se considera que no se considera de gran importancia en el estudio si se ha contactado con el individuo mediante teléfono movil o mediante teléfono fijo.
+
+```{r}
+datos_banco$contact <- NULL
+```
+
+Hagamos un resumen de los datos tras la eliminación de estas variables y de los outliers.
+
+```{r}
+summary(datos_banco)
+```
+
+Vemos que nos hemos quedado con 9 variables más la variable que vamos a predecir.
+
+### Detección de correlaciones
+
+Ahora buscamos variables con altas correlaciones entre sí. La correlación mide la relación entre dos variables. Cuando dos variables están tan altamente correlacionadas que se explican entre sí (al punto de que uno puede predecir la variable con el otro), entonces tenemos un problema de colinealidad (o multicolinealidad). Por lo tanto, es importante tratar el problema de colinealidad. Veamos ahora, si nuestros datos tienen este problema o no. Es importante tener en cuenta que la correlación solo funciona para variables continuas. Podemos calcular las correlaciones usando la función "cor()".
+
+```{r}
+correlat<- cor(datos_banco[c(1,7,9)])
+corrplot(correlat, method = "pie")
+highlyCor <- colnames(datos_banco)[findCorrelation(correlat, cutoff = 0.7, verbose = TRUE)]
+```
+
+De la figura, es evidente que ninguna de las variables están altamente correlacionadas entre sí.
+
+Ya que tenemos variables categóricas, lo que haremos será pasarlas a [one-hot encoding](https://datatricks.co.uk/one-hot-encoding-in-r-three-simple-methods) para poder trabajar con ellas en el modelo. Eliminaremos una de las columnas generadas de cada categoría para eliminiar la dependencia lineal entre ellas. Además, escalaremos las variables numéricas ya que los rangos en los que se encuentran son muy diferentes.
+
+```{r}
+datos_banco[,c(1,7,9)] <- scale(datos_banco[,c(1,7,9)])
+datos_banco$y <- as.factor(ifelse(datos_banco$y == "no",0,1))
+datos_banco_oh <- dummy_cols(datos_banco, select_columns = c("job", 
+                                                              "marital", 
+                                                              "education", 
+                                                              "housing", 
+                                                              "loan",
+                                                              "month"),
+    remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+str(datos_banco_oh)
+colnames(datos_banco_oh)[8] <- "job_white_collar"
+```
+
+## Creación del conjunto de entrenamiento y del conjunto de test
+
+El 70% de los datos originales se utilizan como conjunto de entrenamiento, mientras que el resto (el 30%) se utilizan como conjunto de prueba.
+
+```{r}
+set.seed(3456)
+trainIndex <- createDataPartition(datos_banco_oh$y, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)
+banco_train <- datos_banco_oh[trainIndex, ]
+banco_test <- datos_banco_oh[-trainIndex, ]
+```
+
+### Balanceo del conjunto de datos
+
+Antes de proseguir, observemos que el conjunto de datos que tenemos se encuentra desbalanceado.
+
+```{r}
+table(datos_banco_oh$y)/nrow(datos_banco_oh)
+```
+
+Tenemos que un 88.22% de individuos no se suscriben al depósito mientras que solo un 11.77% si que lo hacen.
+
+Realizaremos técnicas de undersampling y oversampling del paquete [unbalanced](https://cran.r-project.org/web/packages/unbalanced/unbalanced.pdf). 
+
+Se han decidido usar SMOTE, ENN, SMOTE + ENN, CNN, NCL, OSS, Tomek_links, random oversampling y random undersampling con diferentes parametros y se ha tomado la F-medida para seleccionar la mejor forma de balanceo para nuestro conjunto de datos.
+
+```{r, eval=FALSE}
+#Para ver que metodo de balanceo da mejor F-medida.
+medidas = matrix(rep(0,40), nrow = 10, ncol = 4)
+banco_train = banco_train[, c(1:3,18,5:17,4)]
+for (k in 1:10) {
+  for (i in 1:2) {
+    X= banco_train[,-18]
+    Y= banco_train[,18]
+    res_SMOTE=ubSMOTE(X, Y, perc.over = i*100, k = k, perc.under = 0, verbose = TRUE)
+    data = data.frame(res_SMOTE$X,res_SMOTE$Y)
+    names(data) <- names(banco_train)
+    banco_train_balanced=rbind(banco_train,data)
+    
+    svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+    svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+    medidas[k,i] = F_meas(svm4.pred,banco_test$y, relevant = "1")
+    
+    X= banco_train_balanced[,-18]
+    Y= banco_train_balanced[,18]
+    ENN = ubENN(X, Y, k = 3, verbose = TRUE)
+    banco_train_balanced <- cbind(ENN$X, y = ENN$Y)
+    
+    svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+    svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+    medidas[k,(i+2)] = F_meas(svm4.pred,banco_test$y, relevant = "1")
+  }
+}
+
+medidas
+
+
+X= banco_train[,-18]
+Y= banco_train[,18]
+for (j in 1:2) {
+  CNN <- ubCNN(X,Y,k=j)
+  banco_train_balanced <- cbind(CNN$X, y=CNN$Y)
+
+  svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+  svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+  medidas_under = F_meas(svm4.pred,banco_test$y, relevant = "1") 
+  print(medidas_under)
+}
+
+for (k in 1:5) {
+  ENN <- ubENN(X,Y,k=k)
+  banco_train_balanced <- cbind(ENN$X, y=ENN$Y)
+  
+  svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+  svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+  medidas_under = F_meas(svm4.pred,banco_test$y, relevant = "1") 
+  print(medidas_under)
+  
+  if (k %% 2 == 1){
+    NCL = ubNCL(X, Y, k = k, verbose = TRUE)
+    banco_train_balanced <- cbind(NCL$X, y=NCL$Y)
+    
+    svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+    svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+    medidas_under = F_meas(svm4.pred,banco_test$y, relevant = "1")
+    print(medidas_under)
+  }
+}
+
+OSS <- ubOSS(X, Y, verbose = TRUE)
+banco_train_balanced <- cbind(OSS$X, y=OSS$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_OSS = F_meas(svm4.pred,banco_test$y,relevant = "1")
+print(medida_OSS)
+
+tomek <- ubTomek(X, Y, verbose = TRUE)
+banco_train_balanced <- cbind(tomek$X, y=tomek$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_tomek = F_meas(svm4.pred,banco_test$y, relevant = "1")
+print(medida_tomek)
+
+set.seed(3456)
+random <- ubUnder(X, Y, perc = 30, method = "percPos", w = NULL)
+banco_train_balanced <- cbind(random$X, y=random$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_under = F_meas(svm4.pred,banco_test$y, relevant = "1")
+print(medida_under)
+
+set.seed(3456)
+random_over <- ubOver(X, Y, k = 3.6799, verbose=TRUE)
+banco_train_balanced <- cbind(random_over$X, y=random_over$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_over = F_meas(svm4.pred,banco_test$y, relevant = "1")
+print(medida_over)
+```
+
+El método de balanceo que mejor F-medida ha proporcionado y que se ha escogido es el método *random undersampling*.
+
+```{r}
+banco_train = banco_train[, c(1:3,18,5:17,4)] #ponemos la variable dependiente la última
+X= banco_train[,-18]
+Y= banco_train[,18]
+
+set.seed(3456)
+random <- ubUnder(X, Y, perc = 30, method = "percPos", w = NULL)
+banco_train_balanced <- cbind(random$X, y=random$Y)
+table(banco_train_balanced$y)/nrow(banco_train_balanced)
+```
+
+Podemos obsevar que el conjunto de datos de entremaniento ahora tiene un 70% de los datos de la clase mayoritaría y un 30% de la clase minoritaria.
+
+# Modelos
+
+Una vez tenemos los datos limpios, podemos proceder a construir los modelos utilizando diferentes técnicas. Las medidas que utilizaremos para seleccionar el mejor modelo serán la [F-medida](https://en.wikipedia.org/wiki/F-score) y la medida [AUC](https://en.wikipedia.org/wiki/Receiver_operating_characteristic) ya que tratamos con un conjunto de datos no balanceado.
+
+Emplearemos varias técnicas de aprendizaje automático (además de la regresión logística que también utilizaremos) para predecir si una observación se suscribe al depósito o no. Los modelos son entrenados en el conjunto de entrenamiento y validados en el conjunto de prueba.
+
+## Modelo SVM
+
+Los primeros modelos que ajustaremos estarán basados en las máquinas de soporte vectorial. Comenzaremos con un modelo de svm con kernel lineal y con los parámetros base de la función.
+
+```{r}
+svm <- ksvm(y~., data=banco_train_balanced)
+
+pre_svm <- predict(svm,banco_test)
+auc_1 <- roc.curve(banco_test$y, pre_svm)$auc
+f_medida_1<-  F_meas(pre_svm,banco_test$y,relevant = "1")
+cm_imp_1 <- confusionMatrix(pre_svm,banco_test$y, positive = "1")
+cm_imp_1
+```
+
+Aquí podemos ver el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_1` y `r auc_1` respectivamente.
+
+Ahora intentaremos mejorar estas medidas buscando una parrilla con mejores parámetros utilizando validación cruzda.
+
+```{r, eval = FALSE}
+gamma <- c(10^seq(-6,-1, by=1))
+cost <-c(0.01,0.1,1,5,10,50,100)
+
+tuned = tune.svm(y~., data = banco_train_balanced, gamma = gamma, cost = cost, tunecontrol=tune.control(sampling = "cross",cross=10))
+```
+
+Se ha obtenido que los parámetros optimos son $\gamma = 0.01$ y $C=100$. Creemos el modelo con estos parámetros utilizando un kernel lineal.
+
+```{r}
+learn_imp_svm <- svm(y~., data=banco_train_balanced,
+                     cost=100, gamma=0.01)
+
+pre_imp_svm <- predict(learn_imp_svm,banco_test)
+auc_svm_cv <- roc.curve(banco_test$y, pre_imp_svm)$auc
+f_medida_svm_cv <-  F_meas(pre_imp_svm, banco_test$y, relevant = "1")
+cm_imp_svm_cv <- confusionMatrix(pre_imp_svm, banco_test$y, positive = "1")
+cm_imp_svm_cv
+```
+
+Aquí podemos ver el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_svm_cv` y `r auc_svm_cv` respectivamente.
+
+Veamos si variando ligeramente el parámetro $\gamma$ obtenemos un mejor modelo.
+
+```{r}
+learn_imp_svm <- svm(y~., data=banco_train_balanced,
+                     cost=100, gamma=0.015)
+
+pre_imp_svm <- predict(learn_imp_svm,banco_test)
+auc_svm_cv_g1 <- roc.curve(banco_test$y, pre_imp_svm)$auc
+f_medida_svm_cv_g1 <-  F_meas(pre_imp_svm, banco_test$y, relevant = "1")
+cm_imp_svm_cv_g1 <- confusionMatrix(pre_imp_svm, banco_test$y, positive = "1")
+cm_imp_svm_cv_g1
+```
+
+Podemos ver el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_svm_cv_g1` y `r auc_svm_cv_g1` respectivamente.
+
+```{r}
+learn_imp_svm <- svm(y~., data=banco_train_balanced,
+                     cost=100, gamma=0.02)
+
+pre_imp_svm <- predict(learn_imp_svm,banco_test)
+auc_svm_cv_g2 <- roc.curve(banco_test$y, pre_imp_svm)$auc
+f_medida_svm_cv_g2 <-  F_meas(pre_imp_svm, banco_test$y, relevant = "1")
+cm_imp_svm_cv_g2 <- confusionMatrix(pre_imp_svm, banco_test$y, positive = "1")
+cm_imp_svm_cv_g2
+```
+
+Podemos ver el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_svm_cv_g2` y `r auc_svm_cv_g2` respectivamente.
+
+```{r}
+learn_imp_svm <- svm(y~., data=banco_train_balanced,
+                     cost=100, gamma=0.0095)
+
+pre_imp_svm <- predict(learn_imp_svm,banco_test)
+auc_svm_cv_g3 <- roc.curve(banco_test$y, pre_imp_svm)$auc
+f_medida_svm_cv_g3 <-  F_meas(pre_imp_svm, banco_test$y, relevant = "1")
+cm_imp_svm_cv_g3 <- confusionMatrix(pre_imp_svm, banco_test$y, positive = "1")
+cm_imp_svm_cv_g3
+```
+
+Podemos observar el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_svm_cv_g2` y `r auc_svm_cv_g2` respectivamente.
+
+Probemos ahora si cambiando a diferentes kernels podemos obtener un mejor modelo.
+
+```{r}
+learn_imp_svm <- svm(y~., data=banco_train_balanced,
+                     cost=100, gamma=0.01, kernel = "polynomial", degree = 3)
+
+pre_imp_svm <- predict(learn_imp_svm,banco_test)
+auc_svm_cv_k1 <- roc.curve(banco_test$y, pre_imp_svm)$auc
+f_medida_svm_cv_k1 <-  F_meas(pre_imp_svm, banco_test$y, relevant = "1")
+cm_imp_svm_cv_k1 <- confusionMatrix(pre_imp_svm, banco_test$y, positive = "1")
+cm_imp_svm_cv_k1
+```
+
+Podemos ver el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_svm_cv_k1` y `r auc_svm_cv_k1` respectivamente.
+
+```{r}
+learn_imp_svm <- ksvm(y~., data=banco_train_balanced,
+                     C=100, kernel = "rbfdot")
+
+pre_imp_svm <- predict(learn_imp_svm,banco_test)
+auc_svm_cv_k2 <- roc.curve(banco_test$y, pre_imp_svm)$auc
+f_medida_svm_cv_k2 <-  F_meas(pre_imp_svm, banco_test$y, relevant = "1")
+cm_imp_svm_cv_k2 <- confusionMatrix(pre_imp_svm, banco_test$y, positive = "1")
+cm_imp_svm_cv_k2
+```
+
+Podemos ver el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_svm_cv_k2` y `r auc_svm_cv_k2` respectivamente.
+
+Por último en los modelos de svm, vamos a obtener los parámetros óptimos sin utilizar validación cruzada a ver si conseguimos un modelo con mejores medidas.
+
+```{r, eval = FALSE}
+parms<-expand.grid(cost=cost,gamma=gamma)
+gamma <- c(10^seq(-6,-1, by=1))
+cost <-c(0.01,0.1,1,5,10,50,100)
+
+total_accuracy_svm <- function(trainset, testset){
+  f_medida <- NULL; auc <- NULL
+  for(i in 1:NROW(parms)){        
+    learn_svm <- svm(y~., data = trainset,gamma=parms$gamma[i], cost=parms$cost[i])
+    pre_svm <- predict(learn_svm, testset)
+    f_medida[i] <- F_meas(pre_svm,testset$y, relevant = "1")
+    auc[i] <- roc.curve(testset$y, pre_svm, plotit = F)$auc
+  }
+  f_medida
+}
+
+c <- total_accuracy_svm(banco_train_balanced,banco_test)
+opt_parms <- which(c==max(c))[1]
+
+learn_imp_svm <- svm(y~., data=banco_train_balanced,
+                     cost=parms$cost[opt_parms], gamma=parms$gamma[opt_parms])
+summary(learn_imp_svm)
+pre_imp_svm <- predict(learn_imp_svm,banco_test)
+cm_imp_svm <- confusionMatrix(pre_imp_svm, banco_test$y, positive = "1")
+cm_imp_svm
+```
+
+Los parámetros óptimos obtenidos son $C = 100$, $\gamma = 0.01$ igual que los obtenidos con validación cruzada. 
+
+## Otros modelos
+
+### Arbol de clasificación
+
+El primer modelo diferente a los que utilizan máquinas de soporte vectorial será el arbol de clasificación.
+
+```{r}
+tree <- rpart(y ~ ., data = banco_train_balanced, method = 'class', cp = 1e-3)
+tree.pred <- predict(tree, newdata = banco_test, type = 'class')
+
+auc_tree<- roc.curve(banco_test$y, tree.pred)$auc
+f_medida_tree <-  F_meas(tree.pred, banco_test$y, relevant = "1")
+
+cm_tree <- confusionMatrix(tree.pred, banco_test$y, positive = "1")
+cm_tree
+```
+
+Podemos observar el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_tree` y `r auc_tree` respectivamente.
+
+### Regresion lineal
+
+Pasamos a realizar una regresión lineal con todas las variables que hemos seleccionado.
+
+```{r}
+m1 <- glm(y ~ ., data = banco_train_balanced, family = binomial('logit'))
+summ <- summary(m1)
+summ
+```
+
+Podemos ver que la medida AIC de la regresión es `r summ$aic`. Veamos si aplicando *"backward selection"* o *"forward  selection"* podemos obtener un valor de AIC más bajo. Primero aplicaremos *"backward selection"*.
+
+```{r}
+m_full <- m1 
+m_null <- glm(y ~ 1, data = banco_train_balanced, family = binomial('logit'))
+
+back<-step(m_full, trace = F, scope = list(lower=formula(m_null), upper=formula(m_full)),
+     direction = 'backward')
+
+back
+```
+
+Podemos ver que la medida AIC de la regresión utilizando *"backward selection"* es `r back$aic`. Veamos que ocurre ahora utilizando *"forward  selection"*
+
+```{r}
+forward <- step(m_null, trace = F, scope = list(lower=formula(m_null), upper=formula(m_full)),
+     direction = 'forward')
+
+forward
+```
+
+Vemos que la medida AIC de la regresión utilizando *"forward selection"* es `r forward$aic`. Vemos que en los tres casos, la medida AIC es muy similar, siendo mejor utilziando el método de *"backward selection"*.
+
+Veamos gráficamente la desviación de los residuos de la regresión.
+
+```{r}
+index <- 1:dim(banco_train_balanced)[1]
+dev_resid <- residuals(m1)
+y <- banco_train_balanced$y
+dff <- data.frame(index, dev_resid, y)
+
+ggplot(dff, aes(x = index, y = dev_resid, color = y)) +
+  geom_point() + 
+  geom_hline(yintercept = 3, linetype = 'dashed', color = 'blue') +
+  geom_hline(yintercept = -3, linetype = 'dashed', color = 'blue')
+
+```
+
+Por último, veamos la matriz de confusión y las medidas *F_medida* y *AUC* de la regresión.
+
+```{r}
+prob <- predict(m1, banco_test, type = 'response')
+pred <- rep('0', length(prob))
+pred[prob>=.5] <- '1'
+
+auc_glm <- roc.curve(banco_test$y, as.factor(pred))$auc
+f_medida_glm <-  F_meas(as.factor(pred), banco_test$y, relevant = "1")
+
+cm_glm <- confusionMatrix(as.factor(pred),banco_test$y, positive = "1")
+cm_glm
+```
+
+Podemos observar el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_glm` y `r auc_glm` respectivamente.
+
+### Arbol de decisión
+
+Ahora vamos a construir un modelo utilizando un arbol de decisión.
+
+```{r}
+tree.model<- rpart(y~., data=banco_train_balanced, method="class", minbucket=20)
+tree.predict<- predict(tree.model, banco_test, type = "class")
+
+auc_tree2 <- roc.curve(banco_test$y, tree.predict)$auc
+f_medida_tree2 <-  F_meas(tree.predict, banco_test$y, relevant = "1")
+
+confusionMatrix(tree.predict,banco_test$y, positive = "1") 
+```
+
+Podemos observar el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_tree2` y `r auc_tree2` respectivamente.
+
+### Redes neuronales
+
+El siguiente modelo será una red neuronal. Tendrá una capa con $20$ neuronas y un máximo de iteraciones para encontrar los pesos óptimos de $500$.
+
+```{r}
+set.seed(3456)
+nn1 <- nnet(y ~ ., data = banco_train_balanced, size = 20, maxit = 500)
+
+nn1.pred <- predict(nn1, banco_test, type = "class")
+
+auc_nn <- roc.curve(banco_test$y, nn1.pred)$auc
+f_medida_nn <-  F_meas(as.factor(nn1.pred), banco_test$y, relevant = "1")
+
+confusionMatrix(as.factor(nn1.pred),banco_test$y , positive = "1")
+```
+
+Podemos observar el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_nn` y `r auc_nn` respectivamente.
+
+### Bosques aleatorios
+
+Continuamos con un modelo basado en arboles aleatorios. El número de arboles será $2000$
+
+```{r}
+rf3 <- randomForest(y ~ ., data = banco_train_balanced, ntree = 2000)
+rf3.pred <- predict(rf3, newdata = banco_test, type = 'class')
+
+auc_rf <- roc.curve(banco_test$y, rf3.pred)$auc
+f_medida_rf <-  F_meas(as.factor(rf3.pred), banco_test$y, relevant = "1")
+
+confusionMatrix(rf3.pred,banco_test$y, positive = "1")
+```
+
+Podemos observar el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_rf` y `r auc_rf` respectivamente.
+
+### kNN
+
+Por último, crearemos un modelo k-NN, utilizando $k=100$.
+
+```{r}
+prc_test_pred <- knn(train = banco_train_balanced, test = banco_test,cl = banco_train_balanced$y, k=100)
+
+auc_knn <- roc.curve(banco_test$y, prc_test_pred)$auc
+f_medida_knn <-  F_meas(as.factor(prc_test_pred), banco_test$y, relevant = "1")
+
+confusionMatrix(prc_test_pred, banco_test$y, positive = "1")
+```
+
+Podemos observar el gráfico de la curva roc y la matriz de confusión. Para este modelo, los valores de la f-medida y la medida AUC son `r f_medida_knn` y `r auc_knn` respectivamente.
+
+# Conclusiones
+
+Para ver que modelo seleccionamos de todos los que hemos creado, haremos una tabla con las medidas seleccionadas en un principio.
+
+```{r}
+tabla_resumen <- data.frame("svm_inicial" = c(f_medida_1, auc_1),
+                            "svm_100_0.01" = c(f_medida_svm_cv, auc_svm_cv),
+                            "svm_100_0.015" = c(f_medida_svm_cv_g1, auc_svm_cv_g1),
+                            "svm_100_0.02" = c(f_medida_svm_cv_g2, auc_svm_cv_g2),
+                            "svm_100_0.0095" = c(f_medida_svm_cv_g2, auc_svm_cv_g3),
+                            "svm_100_poly" = c(f_medida_svm_cv_k1, auc_svm_cv_k1),
+                            "svm_100_rbfdot" = c(f_medida_svm_cv_k2, auc_svm_cv_k2),
+                            "class_tree" = c(f_medida_tree, auc_tree),
+                            "reg_lineal" = c(f_medida_glm, auc_glm),
+                            "dec_tree" = c(f_medida_tree2, auc_tree2),
+                            "red_neuronal" = c(f_medida_nn, auc_nn),
+                            "random_forest" = c(f_medida_rf, auc_rf),
+                            "knn" = c(f_medida_knn, auc_knn),row.names = c("F-medida", "AUC"))
+
+tabla_resumen <- t(tabla_resumen)
+
+kable( tabla_resumen , caption = "Tabla resumen modelos"
+       , row.names = TRUE
+      )
+```
+
+Viendo la tabla resumen de los diferentes modelos, podemos decir que el que mejor resultados con respecto a la F-medida y a la medida AUC es el de bosques aleatorios por lo que es el que seleccionaríamos. Añadir que los modelos que utilizan máquinas de soporte vectorial no se quedan muy lejos del de bosques aleatorios si miramos la F-medida y la medida AUC. Podemos observar también que cambiar el kernel de las máquinas de soporte vectorial no ha mejorado el modelo.
+
+

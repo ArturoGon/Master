@@ -1,0 +1,893 @@
+---
+title: "Entrega final ANN"
+author: "Arturo González Moya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: yes
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(gplots)
+library(plyr)
+library(ROCR)
+library(VIM)
+library(neuralnet)
+library(unbalanced)
+library(kernlab)
+library(ROSE)
+library(caret)
+library(knitr)
+library(moments)
+library(corrplot)
+library(fastDummies)
+library(plyr) 
+```
+
+# Enunciado
+
+Se considera la base de datos *"bank-full.csv".* Los datos están relacionados con una campaña de marketing directo de una institución bancaria portuguesa. Las campañas de marketing se basaban en llamadas telefónicas. A menudo, se requería más de un contacto con el mismo cliente, para saber si el producto (depósito bancario a plazo) sería ("sí") o no ("no") suscrito. La descripción de la base de datos se puede encontrar en el fichero *"bank-names.txt".* Observar bien la descripción de los datos ya que pueden existir variables que no son útiles para nuestro estudio. Se trata de resolver un problema de clasificación usando ANN sobre el fichero *"bank-full"* y siguiendo los pasos descritos en las clases. Debéis desarrollar un estudio
+que incluya los siguientes puntos:
+
+  * Exploración de datos: se trata de estudiar los datos en R. Conviene estudiar la existencia de "missing values" e identificar datos atípicos.
+  
+  * Visualización de datos: se trata de representar gráficamente los datos.Si usáis boxplots para datos numéricos podéis ver mejor los outliers y decidir si los elimináis o no. Para las variables categóricas utilizar histogramas.
+  
+  * Partición de los datos 70:30.
+  
+  * Ajuste del modelo y plots. Utilizar una red neuronal artificial para clasificar los datos. Hacer diversas pruebas cambiando la estructura de la red y los parámetros. Usar cross-validation. Proporciona una comparativa de las redes utilizadas.
+  
+  * Matriz de confusión. Es importante que comentéis los resultados que vayáis obteniendo.
+
+Observaciones:
+Se tiene que entregar una memoria de la práctica (en formato html y Rmd). Así como todos aquellos
+ficheros que sean necesarios para obtener los resultados que mostréis en el informe de la práctica.
+
+# Introducción
+
+La base de datos “bank_full” es la base de datos de una campaña de marketing directo de una institución bancaria portuguesa. Las campañas de marketing se basaban en llamadas telefónicas. A menudo, se requería más de un contacto con el mismo cliente, para saber si el producto (depósito bancario a plazo) sería ('sí') o no ('no') suscrito. Esta base de datos se puede encontrar en el [Repositorio UCI de aprendizaje automático](https://archive.ics.uci.edu/ml/datasets/Bank+Marketing). El  objetivo es saber si podemos predecir si un individuo se suscribirá a un depósito bancario a plazo o no. Abordaremos el problema utilizando maquinas de soporte vectorial.
+
+# Exploración y limpieza de los datos
+
+Comenzamos la exploración de los datos. Lo primero que haremos será cargar el fichero de datos *bank_full.csv*.
+
+```{r}
+datos_banco <- read.csv("bank-full.csv", sep = ";")
+
+dim(datos_banco)
+
+summary(datos_banco)
+```
+
+Este conjunto de datos tiene $45211$ observaciones y $17$ variables que son las siguientes:
+
+  * **age**: Edad del cliente (variable numérica).
+  
+  * **job**: Tipo de trabajo (variable categórica). Las categorias son: *admin.*, *unknown*, *services*, *unemployed*, *management*, *housemaid*, *entrepreneur*, *student*, *blue-collar*, *self-employed*, *retired* y *technician*.
+  
+  * **marital**: Estado civil (variable categórica). Las categorias son: *married*, *divorced* y *single*.
+  
+  * **education**: Nivel de eduación (variable categórica). Las categorias son: *unknown*, *secondary*, *primary* y *tertiary*.
+  
+  * **default**: Variable binaria que indica si el cliente tiene crédito en mora.
+  
+  * **balance**: Balance medio anual, en euros (variable numérica).
+  
+  * **housing**: Variable binaria que indica si el cliente tiene un prestamo para la vivienda.
+  
+  * **loan**: Variable binaria que indica si el cliente tiene un préstamo personal.
+  
+  * **contact**: Tipo de contacto (variable categórica). Las categorias son: *unknown*, *telephone* y *cellular*.
+  
+  * **day**: Día del último contacto del mes (variable numérica).
+  
+  * **month**: Mes del último contacto del año (variable categórica). Las categorias son: *jan*, *feb*, *mar*, *apr*, *may*, *jun*, *jul*, *aug*, *sep*, *oct*, *nov* y *dec*.
+  
+  * **duration**: Duración del último contacto, en segundos (variable numérica).
+  
+  * **campaign**: Número de contactos realizados durante esta campaña y para este cliente (variable numérica).
+  
+  * **pdays**: Número de días que pasaron después de que el cliente fue contactado por última vez desde una campaña anterior (variable numérica). Si aparece un $-1$ es que el cliente no fue contactado previamente.
+  
+  * **previous**: Número de contactos realizados antes de esta campaña y para este cliente (variable numérica).
+  
+  * **poutcome**: Resultado de la campaña de marketing anterior (variable categórica). Las categorias son: *unknown*, *other*, *failure* y *success*.
+
+  * **y**: Variable categórica objetivo que nos indica si un cliente se ha subscrito a un deposito a plazo.
+
+Para este estudio, no tendremos en cuenta las variables **pdays** y **poutcome** ya que no corresponden a la misma campaña y la variable **default** ya que si tiene un crédito que pagar, no se suscribirá a al depósito.
+
+```{r}
+datos_banco$pdays<-NULL
+datos_banco$poutcome<-NULL
+datos_banco$default<-NULL
+```
+
+
+## Análisis exploratorio de los datos
+
+Veamos primero si exiten valores perdido en el conjunto de datos.
+
+```{r}
+anyNA(datos_banco)
+```
+
+Podemos observar que no. Además, antes hemos visto que ningúna variable categórica tiene tampoco valores perdidos.
+
+Un problema que tenemos es que la variable **month** tiene muchos niveles. Lo que haremos será agruparlos en trimestres.
+
+```{r}
+summary(datos_banco$month)
+```
+
+```{r}
+datos_banco$month <- gsub('^jan', 'First_Trim', datos_banco$month)
+datos_banco$month <- gsub('^feb', 'First_Trim', datos_banco$month)
+datos_banco$month <- gsub('^mar', 'First_Trim', datos_banco$month)
+datos_banco$month <- gsub('^apr', 'Second_Trim', datos_banco$month)
+datos_banco$month <- gsub('^may', 'Second_Trim', datos_banco$month)
+datos_banco$month <- gsub('^jun', 'Second_Trim', datos_banco$month)
+datos_banco$month <- gsub('^jul', 'Third_Trim', datos_banco$month)
+datos_banco$month <- gsub('^aug', 'Third_Trim', datos_banco$month)
+datos_banco$month <- gsub('^sep', 'Third_Trim', datos_banco$month)
+datos_banco$month <- gsub('^oct', 'Fourth_Trim', datos_banco$month)
+datos_banco$month <- gsub('^nov', 'Fourth_Trim', datos_banco$month)
+datos_banco$month <- gsub('^dec', 'Fourth_Trim', datos_banco$month)
+
+datos_banco$month <- as.factor(datos_banco$month)
+```
+
+```{r}
+summary(datos_banco$month)
+```
+
+En el caso de la variable **job** podemos observar que, al igual que la variable **month**, tiene muchos niveles.
+
+```{r}
+summary(datos_banco$job)
+```
+
+Lo que haremos será agrupar en 5 niveles. que seran los siguientes:
+
+  * white-collar: admin., entrepreneur, management, technician
+  
+  * blue-collar
+  
+  * services
+  
+  * not_work: student, retired, unemployed
+  
+  * other/unknown: housemaid, self-employed, unknown
+
+```{r}
+datos_banco$job <- gsub('^admin.', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^entrepreneur', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^management', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^technician', 'white-collar', datos_banco$job)
+datos_banco$job <- gsub('^student', 'not_work', datos_banco$job)
+datos_banco$job <- gsub('^retired', 'not_work', datos_banco$job)
+datos_banco$job <- gsub('^unemployed', 'not_work', datos_banco$job)
+datos_banco$job <- gsub('^housemaid', 'other_unknown', datos_banco$job)
+datos_banco$job <- gsub('^self-employed', 'other_unknown', datos_banco$job)
+datos_banco$job <- gsub('^unknown', 'other_unknown', datos_banco$job)
+
+datos_banco$job <- as.factor(datos_banco$job)
+```
+
+### Visualización de los datos
+
+Comenzamos haciendo un recuento de la variable **age** (que es una variable numérica) con respecto a la variable **y** que es la que queremos predecir. Por lo tanto, haremos un histograma.
+
+```{r}
+ggplot(datos_banco) + 
+  aes(x=as.numeric(age), group=y, fill=y) + 
+  geom_histogram(binwidth=1, color='black')+
+  xlab("Edad") +
+  ylab("Valor") + 
+  ggtitle("Recuento por edad de si aceptan o no el depósito")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que la mayoría de los individuos no se suscriben al deposito bancario a plazo. Además, los que más se suscriben se encuentran entre las edades de 25 a 60 años. Vemos que las personas con edad entre 30 y 40 años son a las que más se les ha ofrecido el deposito a plazo.
+
+Ya que el banco esta ofreciendo un deposito a plazo, se puede intuir que las personas jovenes se suscribirán más a este deposito que las personas mayores. Veámoslo con un boxplot.
+
+```{r}
+ggplot(datos_banco) + 
+  aes(x= y, y= age, group=y, fill=y) + 
+  geom_boxplot(binwidth=1, color='black')+
+  xlab("Aceptan o no el deposito") +
+  ylab("Edad") + 
+  ggtitle("Boxplot de la edad con respecto a las personas que aceptan o no el depósito")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Para explorar la relación entre la clase de trabajo y si se suscriben al deposito a plazo, se calculan los recuentos en las dos categorías de suscripción en las cinco categorías de clase de trabajo, así como las proporciones dentro del grupo. Los resultados se representan como un diagrama de barras.
+
+```{r}
+recuento <- mutate(dplyr::summarise(group_by(datos_banco,job, y), count = n()))
+
+recuento <- ddply(recuento, .(job), transform, percent = count/sum(count) * 100)
+
+# formateamos las etiquetas y calculamos sus posiciones
+recuento <- ddply(recuento, .(job), transform, pos = (cumsum(count) - 0.5 * count))
+recuento$label <- paste0(sprintf("%.0f", recuento$percent), "%")
+
+# diagrama de barras de recuentos por tipo de trabajo con proporciones grupales
+ggplot(recuento, aes(x = job, y = count, fill = y)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5),size=3)+
+  xlab("Trabajo") +
+  ylab("Recuento") + 
+  ggtitle("Recuento de personas que aceptan o no el depósito según el trabajo")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que el porcentaje de los individuos que se suscriben al depósito es mayor en el grupo de los que no trabajan. El porcentaje de los individuos que menos se suscriben corresponde a los del grupo *blue-collar*.
+
+Pregunta: ¿La educación superior influye en la suscripción del depósito?
+
+Respuesta: Exploramos esta pregunta trazando la educación en función de la suscripción al depósito, como se muestra en la siguiente figura.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, fill = education))+
+  geom_bar( stat = "count")+
+  facet_wrap(~education)+
+  xlab("Aceptan o no el deposito") +
+  ylab("Recuento") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo del nivel de estudios")+
+  labs(fill="Nivel de estudios")
+```
+
+Podemos observar que, en proporción, las que tienen más nivel de estudios aceptan más el depósito a plazo. 
+
+Pasamos a obervar si existen diferencias entre los individuos dependiendo del estado civil y de tiene un préstamo para la vivienda.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, fill = housing))+
+  geom_bar( stat = "count")+
+  facet_wrap(~marital)+
+  xlab("Aceptan o no el deposito") +
+  ylab("Recuento") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo del estado civil y el préstamo en la vivienda")+
+  labs(fill="Préstamos en la vivienda")
+```
+
+Podemos ver que no existen difeencias muy significativas en los invididuos que aceptan o no el depósito dependiendo del estado civil. Recalcar que los individuos con un préstamo para la vivienda que rechazan el déposito son más que los que tienen un préstamo para la vivienda y aceptan el depósito.
+
+Pregunta: ¿La duración del último contacto influye en la suscripción del depósito?
+
+Respuesta: Exploramos esta pregunta dibujando la duración del último contacto en función de la suscripción al depósito, como se muestra en la siguiente figura.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, y = duration, fill = y))+
+  geom_boxplot()+
+  xlab("Aceptan o no el deposito") +
+  ylab("Duración del último contacto") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo de la duración del último contacto")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que para las personas que aceptan el depósito, la duración del último contacto es mayor que los que no aceptan. Ya que en esta variable encontramos una diferencía clara, lo que haremos será eliminar los outliers que se corresponden con un coeficiente de $3$ en el boxplot.
+
+```{r}
+## Para eliminar los outliers mas a adelante.
+p <- filter(datos_banco, y == "yes")
+a<-which(p$duration %in% boxplot.stats(p$duration, coef = 3)$out)
+q <- filter(datos_banco, y == "no")
+b<-which(q$duration %in% boxplot.stats(q$duration, coef = 3)$out)
+
+c<- union(a,b)
+```
+
+Pregunta: ¿El número de contactos realizados durante esta campaña y para este cliente influye en la suscripción del depósito?
+
+Respuesta: Exploramos esta pregunta graficando el número de contactos realizados para cada cliente en esta campaña en función de la suscripción al depósito, como se muestra en la siguiente figura.
+
+```{r}
+ggplot(datos_banco, mapping = aes(x= y, y = campaign, fill = y))+
+  geom_boxplot()+
+  xlab("Aceptan o no el deposito") +
+  ylab("Número de contactos en esta campaña a cada cliente") + 
+  ggtitle("Personas que aceptan o no el deposito dependiendo del número de contactos esta campaña")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Vemos que no existen diferencias claras entre los individuos que se suscriben o no al depósito.
+
+Estudiemos ahora si el trimestre en el que se tuvo el último contacto con el cliente tiene relación con su suscripción al depósito.
+
+```{r}
+recuento <- mutate(dplyr::summarise(group_by(datos_banco,month, y), count = n()))
+
+recuento <- ddply(recuento, .(month), transform, percent = count/sum(count) * 100)
+
+recuento <- ddply(recuento, .(month), transform, pos = (cumsum(count) - 0.5 * count))
+recuento$label <- paste0(sprintf("%.0f", recuento$percent), "%")
+
+ggplot(recuento, aes(x = month, y = count, fill = y)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5),size=3)+
+  xlab("Trimestre") +
+  ylab("Recuento") + 
+  ggtitle("Recuento de personas que aceptan o no el depósito según el triemestre en el que las contactaron")+
+  labs(fill="¿Acepta deposito?")
+```
+
+Podemos observar que en el segundo trimestre es cuando más contactos a clientes se realizaron. En el primer y cuarto trimestre se dan los porcentajes más altos de gente que se suscribe al depósito.
+
+### Detectando "outliers" y variables "skewed" (asimétricas)
+
+Una forma de estudiar la existencia de variables asimétricas es utilizando algún índice de asimetría como el determinado por la función skewness(). Una variable se considera "muy asimétrica" si su valor absoluto es mayor que 1. Se considera una variable, "moderately skewed" si su valor absoluto es mayor que 0.5.
+
+```{r}
+skewedVars<- NA
+for(i in names(datos_banco)){
+   if(is.numeric(datos_banco[,i])){
+     if(i != "income"){
+       # Enters this block if variable is non-categorical
+       skewVal <- skewness(datos_banco[,i])
+       print(paste(i, skewVal, sep = ": "))
+       if(abs(skewVal) > 1){
+         skewedVars <- c(skewedVars, i)
+       }
+     }
+   }
+}
+skewedVars
+```
+
+En nuestro caso, podemos observar que las variables *balance*, *duration*, *campaign* y *previous* son muy asimétricas. Lo que haremos por lo tanto será eliminar todas las mencionadas menos *duration*, a la que le eliminaremos los outliers ya que vimos que podía ser relevante en el estudio.
+
+```{r}
+datos_banco$balance <- NULL
+datos_banco$previous <- NULL
+datos_banco$campaign <- NULL
+
+datos_banco <- datos_banco[-c,] #Eliminamos los outliers de duration
+```
+
+Hemos eliminado el siguiente número de outliers.
+
+```{r}
+length(c)
+```
+
+También eliminaremos la variable *contact* ya que se considera que no se considera de gran importancia en el estudio si se ha contactado con el individuo mediante teléfono movil o mediante teléfono fijo.
+
+```{r}
+datos_banco$contact <- NULL
+```
+
+Hagamos un resumen de los datos tras la eliminación de estas variables y de los outliers.
+
+```{r}
+summary(datos_banco)
+```
+
+Vemos que nos hemos quedado con 9 variables más la variable que vamos a predecir.
+
+### Detección de correlaciones
+
+Ahora buscamos variables con altas correlaciones entre sí. La correlación mide la relación entre dos variables. Cuando dos variables están tan altamente correlacionadas que se explican entre sí (al punto de que uno puede predecir la variable con el otro), entonces tenemos un problema de colinealidad (o multicolinealidad). Por lo tanto, es importante tratar el problema de colinealidad. Veamos ahora, si nuestros datos tienen este problema o no. Es importante tener en cuenta que la correlación solo funciona para variables continuas. Podemos calcular las correlaciones usando la función "cor()".
+
+```{r}
+correlat<- cor(datos_banco[c(1,7,9)])
+corrplot(correlat, method = "pie")
+highlyCor <- colnames(datos_banco)[findCorrelation(correlat, cutoff = 0.7, verbose = TRUE)]
+```
+
+De la figura, es evidente que ninguna de las variables están altamente correlacionadas entre sí.
+
+Ya que tenemos variables categóricas, lo que haremos será pasarlas a [one-hot encoding](https://datatricks.co.uk/one-hot-encoding-in-r-three-simple-methods) para poder trabajar con ellas en el modelo. Eliminaremos una de las columnas generadas de cada categoría para eliminiar la dependencia lineal entre ellas. Además, escalaremos las variables numéricas ya que los rangos en los que se encuentran son muy diferentes.
+
+```{r}
+datos_banco[,c(1,7,9)] <- scale(datos_banco[,c(1,7,9)])
+datos_banco$y <- as.factor(ifelse(datos_banco$y == "no",0,1))
+datos_banco_oh <- dummy_cols(datos_banco, select_columns = c("job", 
+                                                              "marital", 
+                                                              "education", 
+                                                              "housing", 
+                                                              "loan",
+                                                              "month"),
+    remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+str(datos_banco_oh)
+colnames(datos_banco_oh)[8] <- "job_white_collar"
+```
+
+## Creación del conjunto de entrenamiento y del conjunto de test
+
+El 70% de los datos originales se utilizan como conjunto de entrenamiento, mientras que el resto (el 30%) se utilizan como conjunto de prueba.
+
+```{r}
+set.seed(3456)
+trainIndex <- createDataPartition(datos_banco_oh$y, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)
+banco_train <- datos_banco_oh[trainIndex, ]
+banco_test <- datos_banco_oh[-trainIndex, ]
+```
+
+### Balanceo del conjunto de datos
+
+Antes de proseguir, observemos que el conjunto de datos que tenemos se encuentra desbalanceado.
+
+```{r}
+table(datos_banco_oh$y)/nrow(datos_banco_oh)
+```
+
+Tenemos que un 88.19% de individuos no se suscriben al depósito mientras que solo un 11.8% si que lo hacen.
+
+Realizaremos técnicas de undersampling y oversampling del paquete [unbalanced](https://cran.r-project.org/web/packages/unbalanced/unbalanced.pdf). 
+
+Se han decidido usar SMOTE, ENN, SMOTE + ENN, CNN, NCL, OSS, Tomek_links, random oversampling y random undersampling con diferentes parametros y se ha tomado la F-medida para seleccionar la mejor forma de balanceo para nuestro conjunto de datos.
+
+```{r, eval=FALSE}
+#Para ver que metodo de balanceo da mejor F-medida.
+medidas = matrix(rep(0,40), nrow = 10, ncol = 4)
+banco_train = banco_train[, c(1:3,18,5:17,4)]
+for (k in 1:10) {
+  for (i in 1:2) {
+    X= banco_train[,-18]
+    Y= banco_train[,18]
+    res_SMOTE=ubSMOTE(X, Y, perc.over = i*100, k = k, perc.under = 0, verbose = TRUE)
+    data = data.frame(res_SMOTE$X,res_SMOTE$Y)
+    names(data) <- names(banco_train)
+    banco_train_balanced=rbind(banco_train,data)
+    
+    svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+    svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+    medidas[k,i] = F_meas(banco_test$y,svm4.pred, relevant = "1")
+    
+    X= banco_train_balanced[,-18]
+    Y= banco_train_balanced[,18]
+    ENN = ubENN(X, Y, k = 3, verbose = TRUE)
+    banco_train_balanced <- cbind(ENN$X, y = ENN$Y)
+    
+    svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+    svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+    medidas[k,(i+2)] = F_meas(banco_test$y,svm4.pred, relevant = "1")
+  }
+}
+
+medidas
+
+
+X= banco_train[,-18]
+Y= banco_train[,18]
+for (j in 1:2) {
+  CNN <- ubCNN(X,Y,k=j)
+  banco_train_balanced <- cbind(CNN$X, y=CNN$Y)
+
+  svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+  svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+  medidas_under = F_meas(banco_test$y,svm4.pred, relevant = "1") 
+  print(medidas_under)
+}
+
+for (k in 1:5) {
+  ENN <- ubENN(X,Y,k=k)
+  banco_train_balanced <- cbind(ENN$X, y=ENN$Y)
+  
+  svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+  svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+  medidas_under = F_meas(banco_test$y,svm4.pred, relevant = "1") 
+  print(medidas_under)
+  
+  if (k %% 2 == 1){
+    NCL = ubNCL(X, Y, k = k, verbose = TRUE)
+    banco_train_balanced <- cbind(NCL$X, y=NCL$Y)
+    
+    svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+    svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+    medidas_under = F_meas(banco_test$y,svm4.pred, relevant = "1")
+    print(medidas_under)
+  }
+}
+
+OSS <- ubOSS(X, Y, verbose = TRUE)
+banco_train_balanced <- cbind(OSS$X, y=OSS$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_OSS = F_meas(banco_test$y,svm4.pred, relevant = "1")
+print(medida_OSS)
+
+tomek <- ubTomek(X, Y, verbose = TRUE)
+banco_train_balanced <- cbind(tomek$X, y=tomek$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_tomek = F_meas(banco_test$y,svm4.pred, relevant = "1")
+print(medida_tomek)
+
+set.seed(3456)
+random <- ubUnder(X, Y, perc = 30, method = "percPos", w = NULL)
+banco_train_balanced <- cbind(random$X, y=random$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_under = F_meas(banco_test$y,svm4.pred, relevant = "1")
+print(medida_under)
+
+set.seed(3456)
+random_over <- ubOver(X, Y, k = 3.6799, verbose=TRUE)
+banco_train_balanced <- cbind(random_over$X, y=random_over$Y)
+  
+svm4 <- ksvm(y ~ ., data = banco_train_balanced)
+svm4.pred <- predict(svm4, newdata = banco_test, type = 'response')
+medida_over = F_meas(banco_test$y,svm4.pred, relevant = "1")
+print(medida_over)
+```
+
+El método de balanceo que mejor F-medida ha proporcionado y que se ha escogido es el método *random undersampling*.
+
+```{r}
+banco_train = banco_train[, c(1:3,18,5:17,4)] #ponemos la variable dependiente la última
+X= banco_train[,-18]
+Y= banco_train[,18]
+
+set.seed(3456)
+random <- ubUnder(X, Y, perc = 30, method = "percPos", w = NULL)
+banco_train_balanced <- cbind(random$X, y=random$Y)
+table(banco_train_balanced$y)/nrow(banco_train_balanced)
+```
+
+Podemos obsevar que el conjunto de datos de entremaniento ahora tiene un 70% de los datos de la clase mayoritaría y un 30% de la clase minoritaria.
+
+# Modelos
+
+Una vez tenemos los datos limpios, podemos proceder a construir los modelos utilizando redes neuronales. Las medidas que utilizaremos para seleccionar el mejor modelo serán la [F-medida](https://en.wikipedia.org/wiki/F-score) y la medida [AUC](https://en.wikipedia.org/wiki/Receiver_operating_characteristic) ya que tratamos con un conjunto de datos no balanceado.
+
+Comencemos construyendo una red neuronal con 2 neuronas, un *threshold* de $0.6$ y $10^5$ pasos máximos. 
+
+```{r}
+n <- names(banco_train_balanced)
+f <- as.formula(paste("y ~", paste(n[!n %in% "y"], collapse = " + ")))
+set.seed(3456)
+nn = neuralnet(f,data=banco_train_balanced, hidden=c(2),
+               linear.output = FALSE,threshold = 0.6,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.4, plus = 1.3),stepmax = 1e+05)
+Predict=compute(nn,banco_test)
+prob <- Predict$net.result
+pred <- ifelse(prob>0.5, 1, 0)
+
+f_medida_1 = F_meas(banco_test$y, as.factor(pred[,2]), relevant = "1")
+f_medida_1
+auc_1 = roc.curve(banco_test$y,as.factor(pred[,2]), plotit = T)
+auc_1
+
+```
+
+Podemos ver que el valor de la F-medida en este caso es de `r f_medida_1` y el valor de la medida AUC es `r auc_1$auc`. Dibujemos como sería la red neuronal obtenida.
+
+```{r}
+plot(nn, rep = "best")
+```
+
+Pasamos a crear una red neuronal con 2 capas, la primera con 4 neuronas y la segunda con 2. El *threshold* será de $0.5$ y tendrá $10^5$ pasos máximos.
+
+```{r}
+n <- names(banco_train_balanced)
+f <- as.formula(paste("y ~", paste(n[!n %in% "y"], collapse = " + ")))
+set.seed(3456)
+nn = neuralnet(f,data=banco_train_balanced, hidden=c(4,2),
+               linear.output = FALSE,threshold = 0.5,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+Predict=compute(nn,banco_test)
+prob <- Predict$net.result
+pred <- ifelse(prob>0.5, 1, 0)
+
+f_medida_2 = F_meas(banco_test$y, as.factor(pred[,2]), relevant = "1")
+f_medida_2
+auc_2 = roc.curve(banco_test$y,as.factor(pred[,2]), plotit = T)
+auc_2
+```
+
+Podemos ver que el valor de la F-medida en este caso es de `r f_medida_2` y el valor de la medida AUC es `r auc_2$auc`. Dibujemos como sería la red neuronal obtenida.
+
+```{r}
+plot(nn, rep = "best")
+```
+
+La próxima red neuronal que crearemos tendrá 2 capas, la primera con 10 neuronas y la segunda con 1. El *threshold* será de $0.6$, tendrá $10^4$ pasos máximos y un factor de aprendizaje de $0.01$.
+
+```{r}
+n <- names(banco_train_balanced)
+f <- as.formula(paste("y ~", paste(n[!n %in% "y"], collapse = " + ")))
+set.seed(3456)
+nn = neuralnet(f,data=banco_train_balanced, hidden=c(10,1),
+               linear.output = FALSE, act.fct = "logistic", learningrate = 0.01, threshold=0.6,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+04)
+Predict=compute(nn,banco_test)
+prob <- Predict$net.result
+pred_mejor <- ifelse(prob>0.5, 1, 0)
+
+f_medida_3 = F_meas(banco_test$y, as.factor(pred_mejor[,2]), relevant = "1")
+f_medida_3
+auc_3 = roc.curve(banco_test$y,as.factor(pred_mejor[,2]), plotit = T)
+auc_3
+```
+
+Podemos ver que el valor de la F-medida en este caso es de `r f_medida_3` y el valor de la medida AUC es `r auc_3$auc`. Dibujemos como sería la red neuronal obtenida.
+
+```{r}
+plot(nn, rep = "best")
+```
+
+Pasamos a crear una red neuronal con 3 capas, con 2 neuronas en cada una de ellas. El *threshold* será de $0.6$ y tendrá $10^5$ pasos máximos.
+
+```{r}
+n <- names(banco_train_balanced)
+f <- as.formula(paste("y ~", paste(n[!n %in% "y"], collapse = " + ")))
+set.seed(3456)
+nn = neuralnet(f,data=banco_train_balanced, hidden=c(2,2,2),
+               linear.output = FALSE,threshold = 0.6,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+
+Predict=compute(nn,banco_test)
+prob <- Predict$net.result
+pred <- ifelse(prob>0.5, 1, 0)
+
+f_medida_4 = F_meas(banco_test$y, as.factor(pred[,2]), relevant = "1")
+f_medida_4
+auc_4 = roc.curve(banco_test$y,as.factor(pred[,2]), plotit = T)
+auc_4
+```
+
+Podemos ver que el valor de la F-medida en este caso es de `r f_medida_4` y el valor de la medida AUC es `r auc_4$auc`. Dibujemos como sería la red neuronal obtenida.
+
+```{r}
+plot(nn,rep = "best")
+```
+
+Por último antes de pasar a realizar validación cruzada, creamos una red neuronal con 3 capas, con 6 neuronas en la primera capa, 4 neuronas en la segunda y 2 en la tercera. El *threshold* será de $0.8$ (para reducir el tiempo computacional) y tendrá $10^5$ pasos máximos.
+
+```{r}
+n <- names(banco_train_balanced)
+f <- as.formula(paste("y ~", paste(n[!n %in% "y"], collapse = " + ")))
+set.seed(3456)
+nn = neuralnet(f,data=banco_train_balanced, hidden=c(6,4,2),
+               linear.output = FALSE,threshold = 0.8,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+Predict=compute(nn,banco_test)
+prob <- Predict$net.result
+pred <- ifelse(prob>0.5, 1, 0)
+
+f_medida_5 = F_meas(banco_test$y, as.factor(pred[,2]), relevant = "1")
+f_medida_5
+auc_5 = roc.curve(banco_test$y,as.factor(pred[,2]), plotit = T)
+auc_5
+```
+
+Podemos ver que el valor de la F-medida en este caso es de `r f_medida_5` y el valor de la medida AUC es `r auc_5$auc`. Dibujemos como sería la red neuronal obtenida.
+
+```{r, fig.width= 9}
+plot(nn,rep = "best")
+```
+
+Con todas la redes consideradas hasta el momento, vamos a crear una tabla resumen para comparar cual ha sido la mejor.
+
+```{r}
+tabla_resumen <- data.frame("nn_2" = c(f_medida_1, auc_1$auc),
+                            "nn_4_2" = c(f_medida_2, auc_2$auc),
+                            "nn_10_1" = c(f_medida_3, auc_3$auc),
+                            "nn_2_2_2" = c(f_medida_4, auc_4$auc),
+                            "nn_6_4_2" = c(f_medida_5, auc_5$auc), row.names = c("F-medida", "AUC"))
+
+kable( tabla_resumen , caption = "Tabla resumen redes neuronales"
+       , row.names = TRUE
+      )
+```
+
+Podemos ver que la red con 2 capas, con 10 neuronas en la primera y 1 neurona en la segunda, es la que mayor F-medida tiene y la red con 3 capas, con 6 neuronas en la primera, 4 neuronas en la segunda y 2 en la tercera, es la que mayor medida AUC tiene. Como no se diferencian mucho entre ambas en la medida auc, seleccionaremos la red con 2 capas, teniendo 10 neuronas en la primera y 1 neurona en la segunda.
+
+Pasamos a realizar validación cruzada con todos las diferentes redes que hemos considerado anteriormente. Debido al tiempo que se tarda en compilar estos chunks, solo se compilará el que mejores resultados ha dado.   
+
+```{r}
+cv.error_10_1 <- NULL
+k <- 10
+
+pbar <- create_progress_bar('text')
+pbar$init(k)
+set.seed(3456)
+folds <- createFolds(banco_train_balanced$y, k = 10)
+
+for(i in 1:k){
+    trainset.cv <- banco_train_balanced[-folds[[k]],]
+    testset.cv <- banco_train_balanced[folds[[k]],]
+    
+    ANN.cv <- neuralnet(f,data=trainset.cv, hidden=c(10,1),
+               linear.output = FALSE,threshold = 0.7,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+    
+    pr.ANN.cv <- compute(ANN.cv, testset.cv)
+    
+    prob <- pr.ANN.cv$net.result
+    pred <- ifelse(prob>0.5, 1, 0)
+    n<-length(testset.cv$y)
+    cv.error_10_1[i] <- F_meas(testset.cv$y, as.factor(pred[,2]), relevant = "1")
+    
+    pbar$step()
+}
+
+cv.error_10_1
+
+## Media F-medida
+mean(cv.error_10_1)
+```
+
+Aqui tenemos el boxplot con la F-medida obtenida con CV.
+
+```{r}
+boxplot(cv.error_10_1,xlab='F-medida en CV',col='cyan',
+        border='blue',names='F-medida',
+        main='F-medida en CV para ANN',horizontal=TRUE)
+```
+
+Sin ejecutar, estos serían los códigos para la validación cruzada de con otros números de neuronas.
+
+```{r, eval=FALSE}
+cv.error_4_2 <- NULL
+k <- 10
+
+pbar <- create_progress_bar('text')
+pbar$init(k)
+set.seed(3456)
+folds <- createFolds(banco_train_balanced$y, k = 10)
+
+for(i in 1:k){
+    trainset.cv <- banco_train_balanced[-folds[[k]],]
+    testset.cv <- banco_train_balanced[folds[[k]],]
+
+    ANN.cv <- neuralnet(f,data=trainset.cv, hidden=c(4,2),
+               linear.output = FALSE,threshold = 0.8,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+    
+    pr.ANN.cv <- compute(ANN.cv, testset.cv)
+    
+    prob <- pr.ANN.cv$net.result
+    pred <- ifelse(prob>0.5, 1, 0)
+    n<-length(testset.cv$y)
+    cv.error_4_2[i] <- F_meas(testset.cv$y, as.factor(pred[,2]), relevant = "1")
+    
+    pbar$step()
+}
+
+cv.error_4_2
+
+## Media F-medida
+mean(cv.error_4_2)
+
+boxplot(cv.error_4_2,xlab='F-medida en CV',col='cyan',
+        border='blue',names='F-medida',
+        main='F-medida en CV para ANN',horizontal=TRUE)
+```
+
+```{r, eval=FALSE}
+cv.error_6_4_2 <- NULL
+k <- 10
+
+pbar <- create_progress_bar('text')
+pbar$init(k)
+set.seed(3456)
+folds <- createFolds(banco_train_balanced$y, k = 10)
+
+seeds <- c(10,15,14071998,1407,0714,9999,1234,72345,9898,1998)
+for(i in 1:k){
+    trainset.cv <- banco_train_balanced[-folds[[k]],]
+    testset.cv <- banco_train_balanced[folds[[k]],]
+    
+    set.seed(seeds[i])
+    ANN.cv <- neuralnet(f,data=trainset.cv, hidden=c(6,4,2),
+               linear.output = FALSE,threshold = 1,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+    
+    pr.ANN.cv <- compute(ANN.cv, testset.cv)
+    
+    prob <- pr.ANN.cv$net.result
+    pred <- ifelse(prob>0.5, 1, 0)
+    n<-length(testset.cv$y)
+    cv.error_6_4_2[i] <- F_meas(testset.cv$y, as.factor(pred[,2]), relevant = "1")
+    
+    pbar$step()
+}
+
+cv.error_6_4_2
+
+## Media F-medida
+mean(cv.error_6_4_2)
+
+boxplot(cv.error_6_4_2,xlab='F-medida en CV',col='cyan',
+        border='blue',names='F-medida',
+        main='F-medida en CV para ANN',horizontal=TRUE)
+```
+
+```{r, eval=FALSE}
+cv.error_2 <- NULL
+k <- 10
+
+pbar <- create_progress_bar('text')
+pbar$init(k)
+set.seed(3456)
+folds <- createFolds(banco_train_balanced$y, k = 10)
+
+for(i in 1:k){
+    trainset.cv <- banco_train_balanced[-folds[[k]],]
+    testset.cv <- banco_train_balanced[folds[[k]],]
+    
+    ANN.cv <- neuralnet(f,data=trainset.cv, hidden=c(2),
+               linear.output = FALSE,threshold = 0.7,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+    
+    pr.ANN.cv <- compute(ANN.cv, testset.cv)
+    
+    prob <- pr.ANN.cv$net.result
+    pred <- ifelse(prob>0.5, 1, 0)
+    n<-length(testset.cv$y)
+    cv.error_2[i] <- F_meas(testset.cv$y, as.factor(pred[,2]), relevant = "1")
+    
+    pbar$step()
+}
+
+cv.error_2
+
+## Media F-medida
+mean(cv.error_2)
+
+boxplot(cv.error_2,xlab='F-medida en CV',col='cyan',
+        border='blue',names='F-medida',
+        main='F-medida en CV para ANN',horizontal=TRUE)
+```
+
+```{r, eval=FALSE}
+cv.error_2_2_2 <- NULL
+k <- 10
+
+pbar <- create_progress_bar('text')
+pbar$init(k)
+set.seed(3456)
+folds <- createFolds(banco_train_balanced$y, k = 10)
+
+for(i in 1:k){
+    trainset.cv <- banco_train_balanced[-folds[[k]],]
+    testset.cv <- banco_train_balanced[folds[[k]],]
+    
+    ANN.cv <- neuralnet(f,data=trainset.cv, hidden=c(2,2,2),
+               linear.output = FALSE,threshold = 1,
+               algorithm = "rprop+", learningrate.factor = list(minus = 0.5, plus = 1.2),stepmax = 1e+05)
+    
+    pr.ANN.cv <- compute(ANN.cv, testset.cv)
+    
+    prob <- pr.ANN.cv$net.result
+    pred <- ifelse(prob>0.5, 1, 0)
+    n<-length(testset.cv$y)
+    cv.error_2_2_2[i] <- F_meas(testset.cv$y, as.factor(pred[,2]), relevant = "1")
+    
+    pbar$step()
+}
+
+cv.error_2_2_2
+
+## Media F-medida
+mean(cv.error_2_2_2)
+
+boxplot(cv.error_2_2_2,xlab='F-medida en CV',col='cyan',
+        border='blue',names='F-medida',
+        main='F-medida en CV para ANN',horizontal=TRUE)
+```
+
+Podemos decir pues, que el modelo que se ha seleccionado ha sido el que tiene 2 capas, en la primera tiene 10 neuronas y en la segunda 1 neurona. Veamos la matriz de confusión de esta red sobre el conjunto de test.
+
+```{r}
+confusionMatrix(banco_test$y, as.factor(pred_mejor[,2]), positive = "1")
+acc <- confusionMatrix(banco_test$y, as.factor(pred_mejor[,2]), positive = "1")$overall[1]
+```
+
+Vemos que la *accuracy* de este modelo es `r acc`.

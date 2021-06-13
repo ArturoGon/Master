@@ -1,0 +1,437 @@
+---
+title: "Entrega Regresión SVM"
+author: "Arturo González Moya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: yes
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(corrplot)
+library(e1071)
+library(kernlab)
+library(caret)
+library(rpart)
+library(randomForest)
+library(nnet)
+library(knitr)
+```
+
+# Introducción
+
+El conjunto de datos “cadata2.csv” recoge información sobre las variables usando todos los grupos de bloques en California del Censo de 1990. En esta muestra, un grupo de bloques en promedio incluye 1425.5 individuos que viven en un área geográficamente compacta. Naturalmente, el área geográfica incluida varía inversamente con la densidad de población. Calculamos las distancias entre los centroides de cada grupo de bloques medidos en latitud y longitud. Se excluyeron todos los grupos de bloques que informaron cero entradas para las variables independientes y dependientes.
+
+En este trabajo se tratará de ajustar el siguiente modelo (donde *ln(median house value)* es la variable dependiente)
+
+$$
+\text{ln(median house value)} = a_1 +a_2*\text{MEDIAN INCOME}+ a_3*\text{MEDIAN INCOME}^2 + a_4*\text{MEDIAN INCOME}^3
+$$
+$$
++ a_5*\text{ln(MEDIAN AGE)} + a_6*\text{ln(TOTAL ROOMS/POPULATION)} + a_7*\text{ln(TOTAL BEDROOMS/POPULATION)}
+$$
+$$
++a_8*\text{ln(POPULATION/HOUSEHOLDS)} + a_9*\text{ln(HOUSEHOLDS)}
+$$
+
+mediante métodos de SVM y otros métodos de regresión.
+
+# Exploración y limpieza de los datos
+
+Comenzamos la exploración de los datos. Lo primero que haremos será cargar el fichero de datos *cadata2.csv*.
+
+```{r}
+datos_ca2 <- read_csv("cadata2.csv")
+
+dim(datos_ca2)
+
+summary(datos_ca2)
+```
+
+Este conjunto de datos tiene $20640$ observaciones y $9$ variables que son las siguientes:
+
+  * **median_house_value**: Valor medio de la vivienda (variable numérica).
+  
+  * **median_income**: Valor ingresos medio (variable numérica).
+  
+  * **housing_median_age**: Edad media de la vivienda (variable numérica).
+  
+  * **total_rooms**: Habitaciones totales de la vivienda (variable numérica).
+  
+  * **total_bedrooms**: Dormitorios totales de la vivienda (variable numérica).
+  
+  * **population**: Población (variable numérica).
+  
+  * **households**: Hogares (variable numérica).
+  
+  * **latitude**: Latitud de la vivienda (variable numérica).
+  
+  * **longitude**: Longitud de la vivienda (variable numérica).
+
+
+## Análisis exploratorio de los datos
+
+Veamos primero si exiten valores perdido en el conjunto de datos.
+
+```{r}
+anyNA(datos_ca2)
+```
+
+Podemos observar que no. Además, vemos que todas nuestras variables son numéricas. Pasamos por lo tanto a añadir al conjunto de datos las variables que necesitamos para realizar el modelo anteriormente descrito.
+
+```{r}
+datos_ca2 <- mutate(datos_ca2,ln_median_house_value = log(median_house_value),
+                    median_income_2 = median_income * median_income,
+                    median_income_3 = median_income * median_income * median_income,
+                    ln_housing_median_age = log(housing_median_age),
+                    ln_tot_rooms_population = log(total_rooms/population),
+                    ln_tot_bedrooms_population = log(total_bedrooms/population),
+                    ln_population_households = log(population/households),
+                    ln_households = log(households))
+```
+
+### Visualización de los datos
+
+Ya que las variables que vamos a usar en la regresión estan fijadas, vamos a realizar una visualización rápida de ellas. Primero veremos todas las variables que influyen en la regresión (menos la que están al cuadrado y al cubo) en un mismo gráfico.
+
+```{r}
+fill <- c("ln_median_house_value" = "gold3", "ln_housing_median_age" = "gray55",
+          "median_income" = "sienna4", "ln_tot_rooms_population" = "red2", 
+          "ln_tot_bedrooms_population" = "magenta1" , 
+          "ln_population_households" = "dodgerblue3", "ln_households" = "chartreuse3")
+ggplot(datos_ca2)+
+  geom_area(mapping = aes(x=ln_median_house_value, fill = "ln_median_house_value"),
+            stat = "bin", alpha = 0.4)+
+  geom_area(mapping = aes(x=ln_housing_median_age, fill = "ln_housing_median_age"),
+            stat = "bin", alpha = 0.4)+
+  geom_area(mapping = aes(x=median_income, fill = "median_income"),
+            stat = "bin", alpha = 0.4)+
+  geom_area(mapping = aes(x=ln_tot_rooms_population, fill = "ln_tot_rooms_population"),
+            stat = "bin", alpha = 0.4)+
+  geom_area(mapping = aes(x=ln_tot_bedrooms_population, fill = "ln_tot_bedrooms_population"),
+            stat = "bin", alpha = 0.4)+
+  geom_area(mapping = aes(x=ln_population_households, fill = "ln_population_households"),
+            stat = "bin", alpha = 0.4)+
+  geom_area(mapping = aes(x=ln_households, fill = "ln_households"),
+            stat = "bin", alpha = 0.4)+
+  xlab("Variables") +
+  ylab("Recuento") + 
+  ggtitle("Area que representan las variables de la regersión")+
+  scale_fill_manual("Variables",values = fill)+
+  theme(legend.position = "right")
+```
+
+Este gráfico representa en que parte se acumulan más los datos en las diferentes variables. Podemos ver que las variables *ln_population_households* y *ln_tot_rooms_population* tienen valores muy similares. La variable *ln_median_house_value* (que es la variable independiente de la regresión) es la que tiene los valores más altos.
+
+En el siguiente gráfico veremos representada la variable *ln_tot_rooms_population* frente a la variable *ln_tot_bedrooms_population*.
+
+```{r}
+ggplot(datos_ca2, mapping = aes(x=ln_tot_rooms_population, y = ln_tot_bedrooms_population))+
+  geom_jitter(color = "blue")+
+  xlab("Variable ln_tot_rooms_population") +
+  ylab("Variable ln_tot_bedrooms_population") + 
+  ggtitle("ln_tot_rooms_population frente a ln_tot_bedrooms_population")
+```
+
+Podemos ver que en el gráfico podemos trazar una linea recta que aproxime bien los puntos, por lo que nos dice que estas variables estarán muy correlacionadas.
+
+# Modelos
+
+Antes de comenzar con los modelos, vamos a seleccionar solo las variables que infuyen en él.
+
+```{r}
+datos_ca2 <- dplyr::select(datos_ca2, c(ln_median_house_value,
+                                        median_income,
+                                        median_income_2,
+                                        median_income_3,
+                                        ln_housing_median_age,
+                                        ln_tot_rooms_population,
+                                        ln_tot_bedrooms_population,
+                                        ln_population_households,
+                                        ln_households))
+```
+
+
+## Creación del conjunto de entrenamiento y del conjunto de test
+
+El 75% de los datos originales se utilizan como conjunto de entrenamiento, mientras que el resto (el 25%) se utilizan como conjunto de prueba.
+
+```{r}
+set.seed(3456)
+trainIndex <- sample(1:nrow(datos_ca2), round(0.75*nrow(datos_ca2), 0))
+ca2_train <- datos_ca2[trainIndex, ]
+ca2_test <- datos_ca2[-trainIndex, ]
+```
+
+## Creación de modelos
+
+### Modelos con SVR
+
+Dentro de los modelos que utilizan máquinas de soporte vectorial para regresión, utilizaremos principalmente 2 tipos que son la epsilon-SVR y la nu-SVR. Utilizaremos 3 tipos de kernel diferentes (el lineal, el polinomial y el radial) y los modelos los realizaremos con diferentes costes para ver cual tiene un menor MSE sobre el conjunto de test.
+
+#### Kernel lineal
+
+Comenzamos realizando los modelos con diferentes costes utilizando epsilon-SVR con kernel lineal. Iremos guardando los resultados de los coeficientes y de los errores en un data frame. La función `svm` del paquete `e1071` no devuleve directamente los coeficientes de la regresión y para calcularlos hay que hacer lo que podemos ver en este [enlace](https://www.kdnuggets.com/2017/03/building-regression-models-support-vector-regression.html).
+
+```{r}
+n <- names(ca2_train)
+f <- as.formula(paste("ln_median_house_value ~",
+                      paste(n[!n %in% "ln_median_house_value"],
+                            collapse = " + "))) # Formula de la regresión
+
+costes <- c(0.001,0.01,0.05,0.1,1,5,10)
+
+df = data.frame()
+
+###### Kernel lineal eps-reg
+for (i in 1:length(costes)) {
+  modelo = svm(f, data = ca2_train, type = "eps-regression", cost = costes[i] ,
+               kernel = "linear")
+  pred <-predict(modelo, ca2_test)
+  w = t(modelo$coefs) %*% modelo$SV
+  b = modelo$rho
+  w = cbind(w,"intercept" = b)
+  mse <- mean((pred-ca2_test$ln_median_house_value)^2)
+  w = cbind(w,"mse" = mse)
+  df= rbind(df, w)
+}
+```
+
+Realizaremos el estudio de los errores una vez tengamos hayamos añadido todos los modelos de SVR al data frame, pero antes echemosle un vistazo para ver como se va creando.
+
+```{r}
+head(df)
+```
+
+Podemos ver que las columnas se corresponden con los coeficientes de las variables de la regresión, el intercepto y el MSE. En las filas se encuentran cada uno de los modelos creados. Al final les añadiremos los nombre a las filas ya que ahora no aparecen.
+
+Continuamos realizando los modelos con diferentes costes utilizando ahora nu-SVR con kernel lineal.
+
+```{r}
+###### Kernel lineal nu-reg
+for (i in 1:length(costes)) {
+  modelo = svm(f, data = ca2_train, type = "nu-regression", cost = costes[i] ,
+               kernel = "linear")
+  pred <-predict(modelo, ca2_test)
+  w = t(modelo$coefs) %*% modelo$SV
+  b = modelo$rho
+  w = cbind(w,"intercept" = b)
+  mse <- mean((pred-ca2_test$ln_median_house_value)^2)
+  w = cbind(w,"mse" = mse)
+  df= rbind(df, w)
+}
+```
+
+Se han añadido 7 modelos más al data frame con los coeficientes de las regresiones y los errores de la predicciones.
+
+#### Kernel radial
+
+Pasamos a construir modelos con el kernel radial, comenzado con el método epsilon-SVR.
+
+```{r}
+###### Kernel radial eps-reg
+for (i in 1:length(costes)) {
+  modelo = svm(f, data = ca2_train, type = "eps-regression", cost = costes[i] , 
+               kernel = "radial")
+  pred <-predict(modelo, ca2_test)
+  w = t(modelo$coefs) %*% modelo$SV
+  b = modelo$rho
+  w = cbind(w,"intercept" = b)
+  mse <- mean((pred-ca2_test$ln_median_house_value)^2)
+  w = cbind(w,"mse" = mse)
+  df= rbind(df, w)
+}
+```
+
+Se han añadido 7 modelos más al data frame con los coeficientes de las regresiones y los errores de la predicciones.
+
+Continuamos realizando los modelos con diferentes costes utilizando ahora nu-SVR con kernel radial.
+
+```{r}
+###### Kernel radial nu-reg
+for (i in 1:length(costes)) {
+  modelo = svm(f, data = ca2_train, type = "nu-regression", cost = costes[i] , 
+               kernel = "radial")
+  pred <-predict(modelo, ca2_test)
+  w = t(modelo$coefs) %*% modelo$SV
+  b = modelo$rho
+  w = cbind(w,"intercept" = b)
+  mse <- mean((pred-ca2_test$ln_median_house_value)^2)
+  w = cbind(w,"mse" = mse)
+  df= rbind(df, w)
+}
+```
+
+Se han añadido 7 modelos más al data frame con los coeficientes de las regresiones y los errores de la predicciones.
+
+#### Kernel polinomial
+
+Por último, vamos a construir modelos con el kernel polinomial de grado 3, comenzado con el método epsilon-SVR.
+
+```{r}
+###### Kernel polinomial eps-reg
+for (i in 1:length(costes)) {
+  modelo = svm(f, data = ca2_train, type = "eps-regression", cost = costes[i] ,
+               kernel = "polynomial", degree = 2)
+  pred <-predict(modelo, ca2_test)
+  w = t(modelo$coefs) %*% modelo$SV
+  b = modelo$rho
+  w = cbind(w,"intercept" = b)
+  mse <- mean((pred-ca2_test$ln_median_house_value)^2)
+  w = cbind(w,"mse" = mse)
+  df= rbind(df, w)
+}
+```
+
+Se han añadido 7 modelos más al data frame con los coeficientes de las regresiones y los errores de la predicciones.
+
+Realizamos los últimos modelos con diferentes costes utilizando ahora nu-SVR con kernel polinomial de grado 3.
+
+```{r}
+###### Kernel polinomial nu-reg
+for (i in 1:length(costes)) {
+  modelo = svm(f, data = ca2_train, type = "nu-regression", cost = costes[i] , 
+               kernel = "polynomial", degree = 3)
+  pred <-predict(modelo, ca2_test)
+  w = t(modelo$coefs) %*% modelo$SV
+  b = modelo$rho
+  w = cbind(w,"intercept" = b)
+  mse <- mean((pred-ca2_test$ln_median_house_value)^2)
+  w = cbind(w,"mse" = mse)
+  df= rbind(df, w)
+}
+```
+
+Se han añadido los 7 últimos modelos de SVR al data frame con los coeficientes de las regresiones y los errores de las predicciones.
+
+Ya que cuando hemos ido guardando los modelos en el data frame no les hemos añadido el nombre en la fila, lo haremos ahora.
+
+```{r}
+nombre <- c(rep("lineal_",14),rep("radial_",14),rep("polinomial_",14))
+coste_nombre <- c(rep(c("0.001","0.01","0.05","0.1","1","5","10"), 6))
+metodo <- c(rep(c(rep("eps_", 7),rep("nu_", 7)), 3))
+
+rownames(df) <- paste0(metodo, nombre, coste_nombre)
+```
+
+Con todos los modelos de SVR, echemos un vistazo a la tabla.
+
+```{r}
+df
+```
+
+Veamos cúal es el modelo que menor error tiene sobre el conjunto de prueba.
+
+```{r}
+which.min(df$mse)
+
+mse_minimo_svr <- df[which.min(df$mse),ncol(df)]
+
+nombre_mejor_modelo <- row.names(df)[which.min(df$mse)]
+nombre_mejor_modelo
+```
+
+El mejor modelo considerando el error sobre el conjunto de prueba es el número 27 del data set, que corresponde con el modelo de nu-SVR, utilizando kernel radial y con un coste de 5. Este error es de `r mse_minimo_svr`. Estudiemos los coeficientes de regresión obtenidos con este modelo.
+
+```{r}
+df[which.min(df$mse),-ncol(df)]
+```
+
+Vemos que las variables *median_income*, *median_income_2*, *median_income_3*, *ln_tot_rooms_population*, *ln_population_households* y *ln_households* tienen un coeficiente positivo, mientras que las variables *ln_housing_median_age*, *ln_tot_bedrooms_population* y el intercepto son negativos. Los coeficientes más grandes en valor absoluto son los correspondientes a las variables *median_income*, *median_income_2* y *median_income_3*.
+
+### Otros método de regresión
+
+Una vez finalizados los modelos de SVR, vamos a pasar a utilizar otros métodos de regresión como pueden ser el arbol de regresión, la regresión lineal, los bosques aleatorios o las redes neuronales.
+
+#### Arbol regresión
+
+El primero método de regresión que aplicaremos será el arbol de regresión.
+
+```{r}
+set.seed(3456)
+tree2 <- rpart(f, data = ca2_train, cp = 1e-8)
+pred <- predict(tree2, newdata = ca2_test)
+mse_reg_tree <- mean((pred-ca2_test$ln_median_house_value)^2)
+mse_reg_tree
+```
+
+El error obtenido con el arbol de regresión es de `r mse_reg_tree`. Podemos observar que este error es mayor que el obtenido con el mejor modelo de SVR que era de `r mse_minimo_svr`.
+
+#### Regreseion lineal
+
+Pasamos ahora a realizar una regresión lineal. Veremos los coeficientes de las regresión y el error cometido en el conjunto de prueba.
+
+```{r}
+reg.model<-lm(ln_median_house_value~.,data=ca2_train)
+pred<-predict(reg.model,ca2_test)
+
+squaredError.reg <- (pred-ca2_test$ln_median_house_value)^2
+mse_reg <- mean(squaredError.reg)
+summary(reg.model)$coefficients[,1]
+mse_reg
+```
+
+Vemos que el error obtenido con el conjunto de prueba en la regresión lineal es de `r mse_reg`, que es mayor que el error obtenido con el mejor modelo de SVR.
+
+Recordemos cuales eran los coeficientes del mejor modelo de SVR.
+
+```{r}
+df[which.min(df$mse),-ncol(df)]
+```
+
+Vemos que en la regresión lineal, los coeficientes son mucho mas pequeños en valor absoluto que los coeficientes obtenidos con el mejor modelo de SVR.
+
+#### Bosques aleatorios
+
+Pasamos ahora a realizar un modelos utilizando bosques aleatorios. El número de arboles utilizado será de 500.
+
+```{r}
+set.seed(3456)
+rf3 <- randomForest(f, data = ca2_train, ntree = 500)
+pred <- predict(rf3, newdata = ca2_test)
+mse_reg_rf <- mean((pred-ca2_test$ln_median_house_value)^2)
+mse_reg_rf 
+```
+
+Podemos observar que el error obtenido sobre el conjunto de prueba es de `r mse_reg_rf`. Vemos que este error es ligeramente mayor que el obtenido con el mejor modelo de SVR (que era de `r mse_minimo_svr`).
+
+#### Redes neuronales
+
+Por último, se utilizará una red neuronal para intentar estimar el valor medio de la vivienda. Este red tendrá un tamaño de 30. El número de iteraciones máximas para calcular el peso de las neuronas será de 500.
+
+```{r}
+set.seed(3456)
+nn1 <- nnet(f, data = ca2_train, size = 30, maxit = 500, linout = TRUE)
+nn1.pred <- predict(nn1, newdata = ca2_test)
+
+mse_reg_nn <- mean((nn1.pred-ca2_test$ln_median_house_value)^2)
+mse_reg_nn
+```
+
+Observamos que el error de la red es de `r mse_reg_nn`, que es ligeramente mayor al mejor modelo utilizando SVR.
+
+# Conclusiones
+
+Para finaliar este trabajo, decimos que el mejor modelo de todos los que se han considerado es el modelo de nu-SVR, utilizando kernel radial y con un coste de 5. Otros modelos de SVR y el modelo de bosques aleatorios también obtienen un error muy parecido al que se obtiene con este. Veamos esto en la siguiente tabla.
+
+```{r}
+resumen <- data.frame("MSE" = df[, ncol(df)])
+
+resumen <- rbind(resumen, mse_reg_tree, mse_reg, mse_reg_rf, mse_reg_nn) 
+
+rownames(resumen) <- c(rownames(df), "Arbol_decision",
+                       "Regresion_lineal", "Bosques_Aleatorios", "Red_Neuronal")
+
+kable( resumen , caption = "Tabla resumen de los errores de los modelos"
+       , row.names = TRUE
+      )
+```
+
+El método que mejor predice el precio medio de la vivienda es el modelo de nu-SVR, utilizando kernel radial y con un coste de 5.
+
