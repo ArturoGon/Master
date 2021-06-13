@@ -1,0 +1,1181 @@
+---
+title: "Trabajo final League of Legends"
+author: "Arturo González Moya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  pdf_document:
+    toc: yes
+    number_sections: yes
+  html_document:
+    toc: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cowplot)
+library(ggpubr)
+library(nortest)
+library(ggcorrplot)
+library(modeest)
+library(e1071)
+library(leaps)
+library(MLmetrics)
+library(rpart)
+library(ElemStatLearn)
+library(devtools)
+library(class)
+library(caret)
+library(fastDummies)
+library(cluster)
+library(rpart.plot)
+```
+
+# Introduccion League of Legends
+
+League of Legends (LoL) es un videojuego formado por 2 equipos de 5 jugadores cada uno. El equipo que gana es aquel que destruye la base del equipo rival primero. Para jugar la partida, cada jugador selecciona un personaje. En competitivo, antes de que cada jugador elija su personaje, lo que se hace es elegir 6 personajes (3 por cada equipo) que no se podran jugar en esa partida (es lo que se denomina como "bans").
+
+Cada jugador tiene una posición que suele ser fija. Las diferentes posiciones son "Top", "Jungle", "Mid", "ADC" y "Support".
+
+Una vez elegidos los personajes de cada jugador, comienza la partida. En la partida se puede conseguir oro para comprar objetos y mejorar al presonaje. Existen dos monstruos muy importantes en la partida: el primero es el dragón y el segundo es el Baron Nashor. Aquí tenemos una imagen del mapa. 
+
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=10cm]{mapa_lol.jpg}
+\end{figure}
+
+La esquina inferior izquierda corresponde a la base del equipo azul (la que el equipo rojo debe destruir para ganar) y en la esquina superior derecha se encuentra la base del equipo rojo (la que el equipo azul debe destruir para ganar) .
+
+Lo que vamos a realizar en este trabajo es un estudio sobre las partidas de profesionales de LoL desde 2015 hasta 2018. 
+
+# Limpieza de los datos.
+
+Tenemos un total de 6 archivos ".csv" que vamos a limpiar y juntar. El primero es *matchinfo.csv*, que contiene la información general de cada partida.
+
+```{r}
+info_partidas = read_csv("data/matchinfo.csv")
+```
+
+Las variables mas importantes a tener en cuenta de este archivo son:
+
+  * League: Es la liga/torneo en la que se jugó la partida (esta variables es un factor). Las ligas/torneos con más visualizaciones son la liga europea (*EULCS*), la liga norteamericana (*NALCS*), la liga china (*LMS*), la liga coreana (*LCK*), el torneo de mitad de temporada (*MSI*) y el torneo mundial (*WC*). Sobre estos realizaremos un estudio posteriormente.
+  
+  * Year: Año en que se ha jugado la partida (esta variable es numerica).
+  
+  * bResult: Esta variable es 1 si el equipo azul gana la partida y 0 si pierde (variable factor).
+  
+  * rResult: Esta variable es 1 si el equipo rojo gana la partida y 0 si pierde (variable factor).
+  
+  * gamelength: Duración de la partida en minutos (variable numérica).
+  
+  * blueXChamp: Campeon utilizado por el jugador de la posición X del equipo azul (variable factor). Como hemos dicho existen las posiciones "Top", "Jungle", "Mid", "ADC" y "Support".
+  
+  * redXChamp: Campeon utilizado por el jugador de la posición X del equipo rojo (variable factor). Como hemos dicho existen las posiciones "Top", "Jungle", "Mid", "ADC" y "Support".
+  
+  * Address: Link a las estadisticas de la partida que se utiliza como indicador (es una variable caracter).
+
+Pasamos a factor las variables de bResult y rResult y vemos si hay algún valor perdido en la lectura.
+
+```{r}
+#Cambiamos a factor 2 variables que ha leido mal
+
+info_partidas$bResult <- as.factor(info_partidas$bResult)
+info_partidas$rResult <- as.factor(info_partidas$rResult)
+
+which(is.na(info_partidas$blueTeamTag))
+```
+
+Si revisamos el documento *.csv*, vemos que los datos perdidos tenemos es porque no se encuentra allí, por lo tanto los eliminaremos.
+
+```{r}
+info_partidas= na.omit(info_partidas)
+```
+
+El siguiente documento que vamos a tratar es *monsters.csv*. En él se encuentran los datos de los monstruos eliminados por cada equipo y en el minuto que lo derrotaron. Nuestra intención es seleccionar el equipo que mató al primer dragón y al primer baron y realizar el estudio solo tendiendo en cuenta estos. Las varibles de este *.csv* son:
+
+  * Team: Nos dice que equipo derrotó al monstruo (variable facor).
+  
+  * Time: Tiempo en el que el mosntruo fue derrotado en minutos (variable númerica).
+  
+  * Type: Tipo de monstruo que se ha derrotado (variable factor). Nosotros distinguiremos entre dragones y barones.
+
+
+Lo que ocurre con la variable *Type* es que en el año 2016, hubo un cambio en los dragones que se dividieron en 4 tipos distintos. En este trabajo no realizaremos esa separación y por lo tanto tenemos que cambiar las etiquetas de las variable *Type* en la que separa en distinto dragones.
+
+```{r, results = "hide", warning = FALSE}
+#Cargamos los datos que vamos a añadir a esta tabla
+
+monstruos = read_csv("data/monsters.csv")
+
+#Seleccionamos los monstruos mas importantes
+
+monstruos <- filter(monstruos, Team %in% c("bDragons", "bBarons", "rDragons", "rBarons")) %>%
+  separate(Type,into = "Type",sep="_",convert=TRUE) %>% #Separamos para los tipos de mosntruos
+  mutate(Type = ifelse((Type != "DRAGON" & Type != "BARON"), "DRAGON", Type))
+```
+
+Una vez realizada esta parte, lo que haremos será contar cuantos dragones y barones ha matado cada equipo y añadir el primer dragón y el primer baron (con el tiempo en el que fueron derrotados) a la tabla de *info_partidas*.
+
+```{r, results = "hide"}
+contador <- mutate(summarise(group_by(monstruos, Address, Team), #Contamos cuantos dragons y barones han matado los diferentes equipos.
+                             val = n(),
+                             Time = min(Time)))
+
+#En b_dragon, r_dragon, b_baron, r_baron lo que haremos será crear las variables b_dragon_tot,
+#r_dragon_tot,b_baron_tot,r_baron_tot que contienen el número de cada mosntruo 
+#derrotado por cada equipo.
+
+b_dragon <- group_by(contador, Address, Team) %>% 
+  filter(Team == "bDragons") %>%
+  transmute(Address = Address,  b_dragon_tot = val)
+
+info_partidas = left_join(info_partidas, b_dragon[,-1], by =  "Address")
+
+r_dragon <- group_by(contador,  Address, Team) %>%
+  filter(Team == "rDragons") %>%
+  transmute(Address = Address,  r_dragon_tot = val)
+
+info_partidas = left_join(info_partidas, r_dragon[,-1], by =  "Address")
+
+b_baron <- group_by(contador, Address, Team) %>%
+  filter(Team == "bBarons") %>%
+  transmute(Address = Address,  b_barons_tot = val) 
+
+info_partidas = left_join(info_partidas, b_baron[,-1], by =  "Address")
+
+r_baron <- group_by(contador, Address, Team) %>%
+  filter(Team == "rBarons") %>%
+  transmute(Address = Address,  r_barons_tot = val)
+
+info_partidas = left_join(info_partidas, r_baron[,-1], by =  "Address")
+
+
+#En f_dragon y f_baron tomamos que equipo ha matado el primer dragon y el primer baron ,
+#respectivamente, (variables Team_dragon y Team_baron son las que añadiremos) y en que 
+#minuto lo han derrotado (añadiremos las variables Time_dragon, Time_baron).
+
+
+f_dragon <- group_by(monstruos, Address, Type) %>% #Tomamos el primer dragon que se ha derrotado en la partida
+  filter(Time == min(Time), Type == "DRAGON") %>%
+  rename(Time_dragon = Time, Team_dragon = Team)
+
+info_partidas = left_join(info_partidas, f_dragon[,-4], by =  "Address")
+
+f_baron <- group_by(monstruos, Address, Type) %>% #Tomamos el primer dragon que se ha derrotado en la partida
+  filter(Time == min(Time), Type == "BARON") %>%
+  rename(Time_baron = Time, Team_baron = Team)
+
+info_partidas = left_join(info_partidas, f_baron[,-4], by =  "Address")
+```
+
+Las variables que hemos añadido a nuestra tabla limpia son:
+
+  * b_dragon_tot: Número de dragones eliminados por el equipo azul en una partida (variable numérica).
+  
+  * r_dragon_tot: Número de dragones eliminados por el equipo rojo en una partida (variable numérica).
+  
+  * b_barons_tot: Número de barones eliminados por el equipo azul en una partida (variable numérica).
+  
+  * r_barons_tot: Número de barones eliminados por el equipo rojo en una partida (variable numérica).
+  
+  * Time_dragon: Tiempo en el que el primer dragón de la partida ha muerto (variable numérica).
+  
+  * Team_dragon: Equipo que ha matado el primer dragón de la partida (variable factor).
+  
+  * Time_baron: Tiempo en el que el primer baron de la partida ha muerto (variable numérica).
+  
+  * Team_baron: Equipo que ha matado el primer baron de la partida (variable factor).
+
+Pasamos con el siguiente documento que contiene el oro que queda jugador tiene en cada minuto de la partida. Los minutos vienen en columna entonces lo que haremos será pasarlo a observación y seleccionaremos la media de oro por partida de cada jugador. En este videojuego, el oro sirve para comprar hasta un máximo de 6 objetos que cuestan entre 2000 y 3600 de oro.
+
+```{r, results = "hide", warning = FALSE, message= FALSE}
+oro = read_csv("data/gold.csv")
+
+oro <- oro %>% 
+  gather(Time , valor,  -1,-2) %>% # Ponemos los minuto como observaciones
+  group_by(Address, Type) %>%
+  na.omit()%>% #Eliminamos los NA que son partidas mas cortas que el número total de minutos.
+  summarise(mean_gold = mean(valor)) %>%
+  spread(Type, mean_gold) # Sacamos las diferentes posiciones como variables
+
+info_partidas <- inner_join(info_partidas, oro, by = "Address")
+```
+
+Las columnas que nos quedan y que utilizaremos son las siguientes:
+
+  * Time: Tiempo de la partida en minutos (variable numérica).
+  
+  * goldX: Media del oro del equipo X ganado por partida (variable numérica).
+  
+  * goldblueX: Media del oro del jugador X ("Top", "Jungle", "Mid", "ADC" o "Support") del equipo azul ganado por partida (variable numérica).
+  
+  * golredX: Media del oro del jugador X ("Top", "Jungle", "Mid", "ADC" o "Support") del equipo rojo ganado por partida (variable numérica).
+  
+  * golddiff: Direfecia de oro entre los 2 equipos. Se calcula de la siguiente forma: *goldblue - goldred*
+  
+El documento *bans.csv* contiene los campeones/personajes restingidos de cada partida. Cada equipo tiene un total de 3 posibles restricciones de campeones por partida. 
+
+```{r, results = "hide", warning = FALSE, message= FALSE}
+baneos = read_csv("data/bans.csv")
+
+baneos <- baneos[, 1:5] #Eliminamos los bans 4 y 5 que se añadieron mas tarde.
+
+b_bans <- group_by(baneos, Address) %>%
+  filter(Team == "blueBans")
+b_bans <- transmute(b_bans, Address = Address, b_ban_1 = ban_1, b_ban_2 = ban_2 ,b_ban_3 = ban_3)
+
+info_partidas = left_join(info_partidas, b_bans, by =  "Address")
+
+r_bans <- group_by(baneos, Address) %>%
+  filter(Team == "redBans")
+r_bans <- transmute(r_bans, Address = Address, r_ban_1 = ban_1, r_ban_2 = ban_2 ,r_ban_3 = ban_3)
+
+info_partidas = left_join(info_partidas, r_bans, by =  "Address")
+```
+
+Lo que hemos conseguido con esto es separar en 6 variables que son las siguientes:
+
+  * b_ban_i: Campeón restringido por el equipo azul en el lugar i (i=1,2,3). Es una variable factor
+  
+  * r_ban_i: Campeón restringido por el equipo rojo en el lugar i (i=1,2,3). Es una variable factor
+
+
+EL documento *kills.csv* contiene cuando un equipo ha matado a un integrante del equipo rival y el minuto de la partida en el que lo han matado. Lo que haremos será algo parecido a lo que hizimos con los monstruos. Tomaremos el número de bajas de cada equipo y que equipo ha conseguido la primera baja y en que minuto.
+
+```{r, results = "hide", message=FALSE}
+muertes = read_csv("data/kills.csv")
+
+posicion_muertes <- muertes
+
+muertes <- muertes[, 1:5] #No contamos las asistencias ya que no 
+#influyen casi en el oro que aporta a la partida.
+
+muertes <- mutate(summarise(group_by(muertes, Address, Team),
+                             kills_val = n(),
+                             first_kill = min(Time)))
+
+b_kills <- group_by(muertes, Address) %>%
+  filter(Team == "bKills",)
+b_kills <- transmute(b_kills, Address = Address, b_kills = kills_val)
+
+info_partidas = left_join(info_partidas, b_kills, by =  "Address")
+
+r_kills <- group_by(muertes, Address) %>%
+  filter(Team == "rKills")
+r_kills <- transmute(r_kills, Address = Address, r_kills = kills_val)
+
+info_partidas = left_join(info_partidas, r_kills, by =  "Address")
+
+f_kill <- group_by(muertes, Address) %>%
+  na.omit() %>%
+  filter(first_kill == min(first_kill)) %>%
+  dplyr::select(-kills_val)%>%
+  rename(Team_f_kill = Team)
+
+info_partidas = left_join(info_partidas, f_kill, by =  "Address")
+```
+
+Las variables que añadiremos y utilizaremos son las siguientes:
+
+  * b_kills: Número de bajas del equipo azul (variable numérica).
+  
+  * r_kills: Número de bajas del equipo azul (variable numérica).
+  
+  * Team_f_kill: Equipo que ha conseguido la primera baja (variable factor).
+  
+  * Time_f_kill: Tiempo en el que se ha conseguido la primera baja en minutos (variable numérica).
+
+
+El último documento que tenemos es *structures.csv*. Este contiene la linea (TOP_LANE, MID_LANE, BOT_LANE) en la que un equipo ha destruido una torre y en que minuto. Igual que lo que hemos hecho con el documento anteriormente limpiado, lo que haremos será tomar el número de torres que ha tirado cada equipo, que equipo ha tirado la primera torre, en que linea era y en que minuto ha sido.
+
+```{r, results = "hide", warning = FALSE, message= FALSE}
+
+torres = read_csv("data/structures.csv")
+
+torres <- filter(torres, (Team == "bTowers" | Team == "rTowers"))
+
+torres <- na.omit(torres)
+
+contar_torres<- mutate(summarise(group_by(torres, Address, Team),
+                             tower_val = n(),
+                             Time = min(Time)))
+
+torres = inner_join(torres, contar_torres, by = c("Address", "Team", "Time"))
+
+b_tower <- group_by(torres, Address, Team) %>%
+  filter(Team == "bTowers") %>%
+  transmute(Address = Address,  b_tower_tot = tower_val)
+
+info_partidas = left_join(info_partidas, b_tower[,-1], by =  "Address")
+
+r_tower <- group_by(torres, Address, Team) %>%
+  filter(Team == "rTowers") %>%
+  transmute(Address = Address, r_tower_tot = tower_val)
+
+info_partidas = left_join(info_partidas, r_tower[,-1], by =  "Address")
+
+f_tower <- group_by(torres, Address) %>%
+  filter(Time == min(Time)) %>%
+  dplyr::select(-c(Type,tower_val))%>%
+  rename(Team_f_tower = Team, Time_tower = Time)
+
+info_partidas = left_join(info_partidas, f_tower, by =  "Address")
+```
+
+Las variables que utilizaremos son:
+
+  * b_tower_tot: Número de torres tiradas por el equipo azul (variable numérica).
+  
+  * r_tower_tot: Número de torres tiradas por el equipo rojo (variable numérica).
+  
+  * Team_f_tower: Equipo que ha conseguido la primera torre (variable factor).
+  
+  * Time_tower: Tiempo en el que se ha conseguido la primera torre en minutos (variable numérica).
+  
+  * Lane: Linea en la que se ha destruido la primera torre (variable factor).
+
+Con esto ya tenemos todas las variables que queremos en una tabla que se llama **info_partidas**. Veamos ahora que ocurre con los datos perdidos, pero primero, eliminamos unas variables que no vamos a utiliar.
+
+
+```{r}
+# Eliminamos las variables que no hagan falta
+info_partidas <- select(info_partidas,  -c(contains("Tag"), 
+                                           blueTop,blueJungle,blueMiddle,blueADC,blueSupport,
+                                           redTop,redJungle,redMiddle,redADC,redSupport))
+```
+
+Observemos en que columnas hay algún dato perdido y estudiemoslo.
+
+```{r}
+#Veamos que ocurre con los NA
+x = c()
+for (i in 1:ncol(info_partidas)) {
+  if (anyNA(info_partidas[,i])) {
+     x[i] <- names(info_partidas[,i])
+  }
+}
+x
+```
+
+Como podemos ver, en muchas columnas hay datos perdidos. Separemos por grupos para ver lo que ocurre.
+
+En las columnas *b_dragon_tot*, *r_dragon_tot*, *b_barons_tot*, *r_barons_tot*, lo que hacemos es cambiar los valores perdidos por 0 ya que estos valores aparecen cuando un equipo no hay matado ningún dragon o ningún baron.
+
+```{r}
+x="_dragon_tot"
+for (i in 1:2) {
+  y = "b"
+  for (j in 1:2) {
+    info_partidas[,paste0(y,x)][is.na(info_partidas[,paste0(y,x)])] <- 0
+    y="r"
+  }
+  x="_barons_tot"
+}
+```
+
+En las columnas *Team_dragon*, *Time_dragon*, *Team_baron*, *Time_baron* existen valores perdidos porque en esa partida ningún equipo ha matado un dragón o un baron, lo que haremos sera poner "Ninguno" a la columna de los equipos y 0 a la columna del tiempo.
+
+```{r}
+x="_dragon"
+y = "Time"
+for (j in 1:2) {
+    info_partidas[,paste0(y,x)][is.na(info_partidas[,paste0(y,x)])] <- 0
+    x="_baron"
+}
+
+x="_dragon"
+y = "Team"
+for (j in 1:2) {
+    info_partidas[,paste0(y,x)][is.na(info_partidas[,paste0(y,x)])] <- "0"
+    x="_baron"
+}
+```
+
+En las columnas *b_kills*, *r_kills* lo que hacemos es cambiar los valores perdidos por 0 ya que estos aparecen porque un equipo no ha matado a nadie en toda la partida.
+
+```{r}
+x="_kills"
+y = "b"
+for (j in 1:2) {
+    info_partidas[,paste0(y,x)][is.na(info_partidas[,paste0(y,x)])] <- 0
+    y="r"
+}
+```
+
+En las columnas *b_tower_tot*, *r_tower_tot* lo que hacemos es cambiar los valores perdidos por 0 ya que estos aparecen porque un equipo no ha tirado ninguna torre en toda la partida.
+
+```{r}
+x="_tower_tot"
+y = "b"
+for (j in 1:2) {
+  info_partidas[,paste0(y,x)][is.na(info_partidas[,paste0(y,x)])] <- 0
+  y="r"
+}
+```
+
+En las columnas *b_ban_1*, *b_ban_2*, *b_ban_3*, *r_ban_1*, *r_ban_2*, *r_ban_3* para estas pondremos que el personaje restringido sera "Ninguno" ya que hay equipos a los que se les pasa el tiempo
+
+```{r}
+y = "b"
+for (i in 1:2) {
+  for (j in 1:3) {
+    x="_ban_"
+    x= paste0(x,j)
+    info_partidas[,paste0(y,x)][is.na(info_partidas[,paste0(y,x)])] <- "Ninguno"
+  }
+  y="r"
+}
+
+```
+
+De esta forma, hemos eliminado todos los valores peridos que habia en nuestra tabla. Lo que haremos ahora será pasar las variables que son factores no ordenados a one hot encoding.
+
+```{r}
+info_partidas <- dummy_cols(info_partidas, select_columns = c("Team_dragon", 
+                                                              "Team_baron", 
+                                                              "Team_f_tower", 
+                                                              "Team_f_kill", 
+                                                              "Lane"),
+    remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+```
+
+En Kaggle ponia que las partidas eran de 2015 a 2018 pero hay partidas con año 2014, por lo tanto las vamos a eliminar.
+
+```{r}
+info_partidas <- filter(info_partidas, Year != 2014)
+```
+Con esto acabamos la parte de limpieza de los datos.
+
+# EDA
+
+Comenzamos el analisis exploratorio con unos datos que son ajenos a la tabla pero que son muy utiles para entender la distribución del juego mediante las bajas de los equipos. En el documento *kills.csv* se encuentran las columnas *x_pos* e *y_pos* que contienen las coordenadas de las bajas que han ocurrido en el mapa. Si separamos el tiempo de partida en 3 fases que serán "Early" (Tiempo de partida hasta el minuto 15), "Mid" (tiempo de partida entre el minuto 15 y el minuto 30) y "Late" (Tiempo de partida posterior al minuto 30) podemos dibujar el siguiente gráfico.
+ 
+
+```{r, warning = FALSE, message= FALSE, fig.align="center"}
+posicion_muertes <- mutate(posicion_muertes, turno = ifelse(Time <= 30, 
+                                                            ifelse(Time <= 15, "Early","Mid"), "Late"))
+
+posicion_muertes$x_pos <- as.numeric(posicion_muertes$x_pos)
+posicion_muertes$y_pos <- as.numeric(posicion_muertes$y_pos)
+
+posicion_muertes <-na.omit(posicion_muertes)
+
+posicion_muertes <- posicion_muertes[,10:12]
+
+ggplot(posicion_muertes)+
+  geom_point(mapping = aes(x=x_pos, y =y_pos, color = turno), size = 0.9)
+```
+
+Como podemos observar, hemos podido representar el mapa mediante las bajas que han realizado los equipos. Las bajas en el principio de la partida se encuentran en la parte más central del mapa y a medida que avanza la partida, las bajas se van expandidendo más hacia las bases de los equipos.
+
+Lo primero que vamos a ver es que campeon es el que más se ha restringido en las partidas profesionales de los años 2015 a 2018.  
+
+```{r, fig.align="center"}
+data.frame(table(unlist(select(info_partidas,b_ban_1:r_ban_3)))) %>%
+  ggplot(mapping = aes(x = as.numeric(Var1), y= Freq))+
+  geom_point(color = "red", shape = 1)+
+  geom_text(aes(label = Var1),position = position_dodge(0.9),
+    vjust = -0.3, check_overlap = TRUE, size = 3.3,  hjust = "inward")+
+  xlab("Campeón que se ha restringido") +
+  ylab("Número de veces que se ha restingido") + 
+  ggtitle("Campeones restingidios en los años 2015 a 2018") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.95))
+```
+
+Como podemos observar, el campeón que más partidas ha sido restringido es *Leblanc*, seguido por el campeón *Kalista*. Vemos que hay muchos campeones que casi no han sido restringidos. Esto se debe a que la mayoría no suelen usarse en competitivo porque son difíciles de combinar o son más débiles que otros. Tambien se puede deber a que en este videojuego, cada año se sacan una media de 5 campeones y puede ser que alguno de los campeones que han sido restringidos pocas veces sea porque era muy nuevo.
+
+Pasamos a mirar como influye la diferencia de oro entre los equipos en la victoria de cada uno. Primero lo miraremos agrupando por el año en que se jugó la partida. 
+
+
+```{r, fig.align="center", fig.width=5, fig.height=5}
+ggplot(info_partidas,mapping = aes(x=bResult, y=golddiff, fill = bResult)) +
+  geom_boxplot()+
+  facet_wrap(~Year,nrow=3)+
+  stat_summary(fun.y = mean, geom ="point", shape = 8, size = 3, col = "red") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  xlab('Resultado Equipos') +
+  ylab("Diferencia de oro") + 
+  ggtitle("Diferencia media de oro agrupado por años")
+```
+
+Como podemos observar, no existe apenas diferencia en el oro entre las distintos años en que se han jugado las partidas cuando gana el equipo rojo o el quipo azul. La única diferencia recalcable es que a medida que avanzan los años, los equipos han necesitado una menor difeencia de oro para llevarse las partidas. Esto puede deberse a un mayor conocimiento del juego o a un cambio en los diferentes campeones. Vamos a mirarlo ahora separando por ligas. Lo que haremos solo mirarlo en las ligas más importantes que hemos mencionado al principio de este documento.
+
+```{r, fig.align="center", fig.width=7, fig.height=4}
+info_partidas%>%
+  filter(League %in% c("EULCS","NALCS","LCK", "LMS", "MSI", "WC")) %>%
+  ggplot(mapping = aes(x=bResult, y=golddiff, fill = bResult)) +
+    geom_boxplot()+
+    facet_wrap(~League,nrow=3)+
+    stat_summary(fun.y = mean, geom ="point", shape = 8, size = 3, col = "red") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Resultado Equipos") +
+    ylab("Diferencia de oro") + 
+    ggtitle("Diferencia media de oro agrupado por ligas")
+```
+
+
+En este gráfico podemos observar que en todas las ligas, el equipo que gana lo hace mayoritariamente con una diferencia de oro positiva a su favor, es decir, cuando nuestra variable *difrencia de oro* es negativa (a favor del equipo rojo) gana el equipo rojo y viceversa. También podemos observar las diferencias de oro cuando un equipo gana no son muy grandes ya que en general no llegan casi nunca a 5000 que son 2 objetos de diferencia entre los equipos (cada objeto vale de media 2600 de oro). 
+
+Pasaremos a estudiar los estadísticos de la duración de las partidas por cada liga y vamos a dibujarlas.
+
+```{r, fig.align="center", fig.width=7, fig.height=5}
+tabla <- mutate(summarise(group_by(filter(info_partidas,League %in% c("EULCS",
+                                                                      "NALCS","LCK", 
+                                                                      "LMS", "MSI", 
+                                                                      "WC")), League),
+                             Media = mean(gamelength),
+                          Minimo = min(gamelength),
+                          Maximo = max(gamelength),
+                          Desv_Est = sd(gamelength)))
+
+tabla <- gather(tabla, Estadistico, valor, -1)
+tabla
+ggplot(tabla, mapping = aes(x=reorder(League, valor), y= valor))+
+  geom_point(aes( color = Estadistico ), size = 3)+
+  xlab("Ligas") +
+  ylab("Valor del estadistico") + 
+  ggtitle("Duración de partidas por liga")
+```
+
+Como podemos observar, la desviación estándar es prácticamente identica en todas las ligas. La partida más rápida se ha jugado en Norte América con una duración de 19 minutos, mientras que la más larga se ha jugado en la liga coreana con una duración de 95 minutos. La media de partidas más grande también se encuentra en la liga coreana. Esto se debe a que en esta liga el estilo de juego es más pausado y más táctico.
+
+Lo siguiente que miraremos será como varía la media de la duración de las partidas de las regiones más populares en los distintos años.
+
+```{r, fig.align="center", fig.width=6, fig.height=4}
+tabla2 <- mutate(summarise(group_by(filter(info_partidas,League %in% c("EULCS","NALCS",
+                                                                       "LCK", "LMS", 
+                                                                       "MSI", "WC")),
+                                    League, Year),
+                             mean_gamelength = mean(gamelength)))
+
+ggplot(tabla2, mapping = aes(x=reorder(League, mean_gamelength), y= mean_gamelength))+
+  geom_point(aes(color = as.factor(Year)), size = 2)+
+  xlab("Ligas") +
+  ylab("Valor de la media") + 
+  ggtitle("Duración de partida por liga y año")+
+  labs(color="Año de la partida")
+```
+
+Como podemos observar, en el torneo *MSI* se tiene la media tiempo de partida mas baja en 2015, mientras que la media de partidas mas grande viene de la liga coreana *LCK* en el año 2018. Podemos observar también que en el torneo *MSI* y en la liga europea *EULCS*, salvo en el 2015, la media de las partidas de los años posteriores se mantuvo muy similar. En la liga china *LMS*, a medida que avanzan los años la duración media de las partidas va en descenso. Esto último puede deberse a que en los últimos años, la liga china se está caracterizando por ser una liga con muchas bajas, lo que ayuda a que el oro general aumente y así exista un desarrollo más rápido de las partidas.
+
+Lo siguiente que vamos a ver es como varía el oro medio de cada jugador del equipo azul cuando ganan o cuando pierden.
+
+```{r, fig.align="center", fig.width=6, fig.height=4}
+tabla4<- transmute(info_partidas, Address = Address,
+                          bResult = bResult,
+                          mean_goldblueADC =goldblueADC,
+                          mean_goldblueTop  = goldblueTop,
+                          mean_goldblueJungle = goldblueJungle,
+                          mean_goldblueMiddle = goldblueMiddle,
+                          mean_goldblueSupport = goldblueSupport)
+
+tabla4 <- gather(tabla4, Estadistico, valor, -1, -2)
+
+ggplot(tabla4, mapping = aes(x=bResult, y = valor))+
+  geom_boxplot(mapping = aes(color = Estadistico))+
+  scale_color_discrete(labels = c("Media oro ADC", "Media oro Jungle",
+                                  "Media oro Middle ", "Media oro Support", "Media oro Top"))+
+  xlab("Resultado equipo azul") +
+  ylab("Valor") + 
+  ggtitle("Media de oro por posición de los jugadores del equipo azul")
+```
+
+Podemos observar que claramente cuando el equipo azul gana, sus jugadores tienen una mayor cantidad de oro. Cabe resaltar el outlaier que aparece en la posición *Middle* cuando el equipo azul gana. También destacar que el jugador *Support* es el que menos oro gana en la partida y el jugador *ADC* es el que más oro gana cuando su equipo gana pero no hay una gran diferencia ya que siempre se suelen destinar todos los recursos de la partida a este jugador, ganen o pierdan.
+
+Vamos a ver ahora como influye el número de dragones y barones derrotados en la victoria de los equipos. Primero lo veremos para los dragones.
+
+```{r, fig.align="center", fig.width=7, fig.height=4}
+p1 <- ggplot(info_partidas, mapping = aes(x= bResult, y = b_dragon_tot))+
+  geom_violin(fill = "royalblue4")+
+  xlab("Equipo azul") +
+  ylab("Número de dragones derrotados") 
+
+p2 <- ggplot(info_partidas, mapping = aes(x= rResult, y = r_dragon_tot))+
+  geom_violin(fill = "red4")+
+  xlab("Equipo rojo") +
+  ylab("Número de dragones derrotados") 
+
+plot_grid(p1, p2, labels = c('Dragones equipo azul', 'Dragones equipo rojo'), label_size = 10)
+```
+
+Como podemos observar, cuando un equipo pierde, lo más común es que pierda teniendo 0 dragones derrotados, mientras que cuando un equipo gana, es muy poco probable que haya ganado habiendo derrotado 0 dragones. Vemos que ambos equipos suelen ganar con 2 o 3 dragones a su favor y, en alguna partida, el equipo azul ha necesitado hasta 8 dragones para ganar.
+
+Veamos que ocurre con los barones.
+
+```{r, fig.align="center", fig.width=7, fig.height=4}
+p1 <- ggplot(info_partidas, mapping = aes(x= bResult, y = b_barons_tot))+
+  geom_violin(fill = "royalblue4")+
+  xlab("Equipo azul") +
+  ylab("Número de barones derrotados") 
+
+p2 <- ggplot(info_partidas, mapping = aes(x= rResult, y = r_barons_tot))+
+  geom_violin(fill= "red4")+
+  xlab("Equipo rojo") +
+  ylab("Número de barones derrotados") 
+
+plot_grid(p1, p2, labels = c('Barones equipo azul', 'Barones equipo rojo'), label_size = 10)
+
+```
+
+Como podemos observar, el número de barones derrotados es mucho menor que el número de dragones derrotados ya que este monstruo aparece a partir del minuto 20 de partida, mientras que el dragón aparece al minuto 4 de partida. También podemos ver que derrotar este monstruo es mucho más decisivo para la victoria. Muchos de los equipos ganan con un solo baron derrotado a su favor, mientras que la mayoría de las derrotas vienen acompañadas con 0 barones derrotados a favor del equipo que pierde. Recalcar que un equipo que jugó en el lado rojo perdió una partida habiendo derrotado a 6 barones en una partida. 
+
+El último gráfico que veremos será de la influencia del número de bajas con respecto a la victoria de cada equipo.
+
+```{r, fig.align="center", fig.width=7, fig.height=4}
+p1 <- ggplot(info_partidas, mapping = aes(x= bResult, y = b_kills))+
+  geom_violin(color = "royalblue4", fill = "grey65")+
+  geom_boxplot(width = .1, fill = "royalblue4", outlier.shape = NA) +
+  stat_summary(fun.y = "median", geom = "point", col = "white")+
+  xlab("Equipo azul") +
+  ylab("Número de enemigos derrotados") + 
+  scale_y_continuous(breaks=seq(0, 80, 10), limit = c(0,60))
+
+p2 <- ggplot(info_partidas, mapping = aes(x= rResult, y = r_kills))+
+  geom_violin(color = "red4", fill = "grey65")+
+  geom_boxplot(width = .1, fill = "red4", outlier.shape = NA) +
+  stat_summary(fun.y = "median", geom = "point", col = "white")+
+  xlab("Equipo rojo") +
+  ylab("Número de enemigos derrotados")+ 
+  scale_y_continuous(breaks=seq(0, 80, 10), limit = c(0,60)) 
+
+plot_grid(p1, p2, labels = c('Muertes equipo azul', 'Muertes equipo rojo'), label_size = 10)
+```
+
+Como podemos observar, no existen grandes diferencias en el número de bajas cuando gana el equipo azul o el equipo rojo. Podemos recalcar que cuando el equipo rojo gana, tienen la media algo mayor que cuando el equipo azul gana, pero no es nada relevante.
+
+Pasamos a realizar unos contrastes de independencia entre diferentes variables de nuestros datos.
+
+El primero será para ver si las variables *bResult* y *Team_dragon_bDragons* son independientes.
+
+# Contraste de independencia entre si matar el primer drago/baron/torre implica que ganes la partida
+
+$$
+\left\{
+\begin{array}{ll}
+H_{0}: &  \mbox{El resultado de la partida y el equipo que mata el primer dragón son independientes}\\
+H_{1}: & \mbox{El resultado de la partida y el equipo que mata el primer dragón no son independientes}
+\end{array}
+\right.
+$$
+Para realizar el contraste de independencia necesitamos la tabla de contingencia.
+
+```{r}
+tabla_1 <- table(info_partidas$bResult, info_partidas$Team_dragon_bDragons)
+```
+
+Revisamos que las frecuencias esperadas con todas mayores que 5.
+
+```{r}
+tabla_1_freq = (rowSums(tabla_1)%*%t(colSums(tabla_1)))/sum(tabla_1)
+tabla_1_freq
+```
+
+Como todas las frecuencias con mayores que 5, realizamos el test chisq.
+
+```{r}
+chisq.test(tabla_1)
+```
+Con ese p-valor, rechazamos la hipótesis nula y entonces esas variables no son independientes. El siguiente contraste de independencia es para las variables *bResult* y *Team_baron_bBarons*
+
+$$
+\left\{
+\begin{array}{ll}
+H_{0}: &  \mbox{El resultado de la partida y el equipo que mata el primer baron son independientes}\\
+H_{1}: & \mbox{El resultado de la partida y el equipo que mata el primer baron no son independientes}
+\end{array}
+\right.
+$$
+
+```{r}
+tabla_2 <- table(info_partidas$bResult, info_partidas$Team_baron_bBarons)
+```
+
+Revisamos que las frecuencias esperadas con todas mayores que 5.
+
+```{r}
+tabla_2_freq = (rowSums(tabla_2)%*%t(colSums(tabla_2)))/sum(tabla_2)
+tabla_2_freq
+```
+
+Como todas las frecuencias con mayores que 5, realizamos el test chisq.
+
+```{r}
+chisq.test(tabla_2)
+```
+
+Con ese p-valor, rechazamos la hipótesis nula y entonces esas variables no son independientes. El siguiente contraste de independencia es para las variables *bResult* y *Team_f_kill_rKills*
+
+$$
+\left\{
+\begin{array}{ll}
+H_{0}: &  \mbox{El resultado de la partida y el equipo que consigue la primera baja son independientes}\\
+H_{1}: & \mbox{El resultado de la partida y el equipo que consigue la primera baja no son independientes}
+\end{array}
+\right.
+$$
+
+```{r}
+tabla_3 <- table(info_partidas$bResult, info_partidas$Team_f_kill_rKills)
+```
+
+Revisamos que las frecuencias esperadas con todas mayores que 5.
+
+```{r}
+tabla_3_freq = (rowSums(tabla_3)%*%t(colSums(tabla_3)))/sum(tabla_3)
+tabla_3_freq
+```
+
+Como todas las frecuencias con mayores que 5, realizamos el test chisq.
+
+```{r}
+chisq.test(tabla_3)
+```
+
+Con ese p-valor, rechazamos la hipótesis nula y entonces esas variables no son independientes. El siguiente contraste de independencia es para las variables *bResult* y *Team_f_tower_rTowers*
+
+$$
+\left\{
+\begin{array}{ll}
+H_{0}: &  \mbox{El resultado de la partida y el equipo que consigue la primera torre son independientes}\\
+H_{1}: & \mbox{El resultado de la partida y el equipo que consigue la primera torre no son independientes}
+\end{array}
+\right.
+$$
+
+```{r}
+tabla_4 <- table(info_partidas$bResult, info_partidas$Team_f_tower_rTowers)
+```
+
+Revisamos que las frecuencias esperadas con todas mayores que 5.
+
+```{r}
+tabla_4_freq = (rowSums(tabla_4)%*%t(colSums(tabla_4)))/sum(tabla_4)
+tabla_4_freq
+```
+
+Como todas las frecuencias con mayores que 5, realizamos el test chisq.
+
+```{r}
+chisq.test(tabla_4)
+```
+
+Con ese p-valor, rechazamos la hipótesis nula y entonces esas variables no son independientes.
+
+Antes de terminar con el análisis exploratorio, veamos cuantas partidas gana el equipo azul y cuantas gana el equipo rojo.
+
+```{r}
+tabla5 <- mutate(summarise(group_by(info_partidas, bResult),
+                             Recuento = n()))
+tabla5
+```
+
+Como podemos observar, el equipo azul gana unas 600 partidas más que el equipo rojo. Por lo tanto, si un equipo tiene que elegir en que lado jugar, es mejor que elija jugar en el lado azul.
+
+# ML
+
+Para realizar la parte de ML, eliminamos las variables *rResult*,*goldred*,*goldblue* y *golddiff* ya que tienen una alta correlación con otras y pueden afectar a los modelos.
+
+```{r}
+datos <- dplyr::select(info_partidas,-c(rResult, goldred, goldblue, golddiff))
+entrenamiento = filter(datos, Year <2017 | (Year == 2017 & Season == "Spring"))
+test = filter(datos,Year > 2017 | (Year == 2017 & Season !="Spring"))
+```
+
+Y eliminamos las variables *League*, *Address*, *Season* y  *Type* porque no son necesarias para los modelos y las variables factor con mas de 130 niveles también las eliminamos. 
+
+```{r}
+datos <- dplyr::select(datos,-c(League, Address, Season , Type, b_ban_1:r_ban_3, blueTopChamp:redSupportChamp ))
+entrenamiento <- dplyr::select(entrenamiento,-c(League, Address, Season , Type, b_ban_1:r_ban_3, blueTopChamp:redSupportChamp ))
+test <-  dplyr::select(test,-c(League, Address, Season , Type, b_ban_1:r_ban_3, blueTopChamp:redSupportChamp))
+```
+
+Nuestros conjuntos de entrenamiento y test los hemos seleccionado de tal forma que el de test sean las partidas posteriores a las partidas que hay en el conjunto de entrenamiento.
+
+## Modelos regresión variable continua
+
+Los modelos que vamos a utilizar de son la regresión lineal y SVM. lo que intentaremos predecir será el oro del jugador que juega en la posición *ADC* en el equipo rojo.
+
+Comenzamos realizando la regresión lineal.
+
+```{r}
+#Reg lineal
+lin_reg = lm(formula =  goldredADC ~ ., 
+             data = entrenamiento)
+y_pred = predict(lin_reg, newdata = test)
+
+rmse_lm = sqrt(MSE(y_pred = y_pred,y_true = test$goldredADC))
+
+rmse_lm
+```
+
+Para mirar la precisión del modelo, miramos la raíz del error cuadrático medio. Obtenemos un error de `rmse_lm`. Ya que nuestra variable tiene un valor muy alto, este error no es tanto ya que en el juego no representa practicamente nada una diferencia de 500 de oro (solo sirve para comprar una pequeñ aparte de un objeto mayor). Lo que haremos será eliminar las variables mediante el proceso "backward" de la función *step*.
+
+```{r, results = "hide"}
+nueva_reg = step(lin_reg, direction = "backward")
+```
+
+```{r}
+summary(nueva_reg)
+```
+
+Aquí podemos ver los coeficientes de la nueva regresión. Vamos a realizar la predicción y a calcular el rmse.
+
+```{r}
+y_pred = predict(nueva_reg, newdata = test)
+
+rmse_nueva_reg = sqrt(MSE(y_pred = y_pred,y_true = test$goldredADC))
+
+rmse_nueva_reg
+```
+
+Obtenemos un error de `r rmse_nueva_reg`. Hemos reducido el número de variables que utiliza la regresión pero no hemos conseguido reducir mucho el error cuadrático medio.
+
+Veamos primero el gráfico de qqplot de la regresión con menos variables.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+ggplot(as.data.frame(residuals(nueva_reg)),aes(sample = residuals(nueva_reg))) +  geom_qq() 
+```
+
+Como podemos observar, el gráfico se empieza a asemejar a una S, por lo que este modelo no es muy bueno. Esto también lo veremos en el siguiente gráfico.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+ggplot(data = nueva_reg, aes(x = .fitted, y = .resid))+
+    geom_jitter()+
+    geom_hline(yintercept = 0, linetype = "dashed")+
+    xlab("Valores ajustados")+
+    ylab("Residuos")
+```
+
+Vemos que los residuos se dispersan mucho de lo que sería la linea discontinua. Vamos a dibujar como se verian los datos si los pintamos en una gráfica *Valor real vs Valor predicho*.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+plot_df <- data.frame("goldredADC_real" = test$goldredADC, "goldredADC_predicho" = unname(y_pred))
+
+plot_df %>%
+  ggplot()+
+  geom_jitter(aes(x= goldredADC_real, y = goldredADC_predicho), colour = "black", alpha = 0.5) +
+  geom_line(aes(x = goldredADC_real, y = goldredADC_real), size = 1, linetype="longdash", color = "red") +
+  xlab("Valor real")+
+  ylab("Valor predicho")+
+  labs(title = "Valor real vs Valor predicho")
+```
+
+Para que el modelo fuese bueno, lo que beria ocurrir es que los puntos se deberian aproximar lo máximo posible a la recta roja, pero vemos que muchos de estos puntos estan fuera, por lo que intentaremos usar otro método para predecir.
+
+Pasamos a realizar el modelo mediente SVR y miraremos el rmse.
+
+```{r}
+#SVM
+svm = svm(formula = goldredADC ~ .,
+                 data = entrenamiento,
+                 type = "eps-regression",
+                 kernel = "radial")
+
+y_pred = predict(svm, newdata = test)
+
+rmse_svm = sqrt(MSE(y_pred = y_pred,y_true = test$goldredADC))
+
+rmse_svm
+
+```
+
+Vemos que esta con este método, el error es de `r rmse_svm`. Hemos obtenido un error mayor que el que nos proporcionada la regresión, por lo tanto nos quedaremos con la regresión. De todas formas, vamos a dibujar el qqplot y la gráfica *Valor real vs Valor predicho* como anteriormente
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+ggplot(as.data.frame(residuals(svm)),aes(sample = residuals(svm))) +  geom_qq()
+```
+
+Vemos que en el qqplot, la representación se parece menos a una recta que en el caso de la regresión.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+plot_df <- data.frame("goldredADC_real" = test$goldredADC, "goldredADC_predicho" = unname(y_pred))
+
+plot_df %>%
+  ggplot()+
+  geom_jitter(aes(x= goldredADC_real, y = goldredADC_predicho), colour = "black", alpha = 0.5) +
+  geom_line(aes(x = goldredADC_real, y = goldredADC_real), size = 1, linetype="longdash", color = "red") +
+  xlab("Valor real")+
+  ylab("Valor predicho")+
+  labs(title = "Valor real vs Valor predicho")
+```
+
+Este gráfico se asemeja bastante al de la regresión, los puntos no se apriman mucho a la recta roja.
+
+Finalmente, entre estos dos modelos elegiremos la regresión aunque ambos no sean muy buenos modelos.
+
+## Modelos clasificación variable discreta
+
+Clasificaremos la variable *bResult* para ver que equipo ganará la partida. Los métodos que utilizaremos serán arbol de decisión, regresión logística y kNN. Comenzaremos con el arbol de decisión. La métrica que utilizaremos para ver la efectividad del modelo será *accuracy*.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+#Arbol de decisión
+arbol = rpart(formula = bResult ~ ., 
+                   data = entrenamiento)
+
+# Predicción de los resultados con el conjunto de testing
+y_pred = predict(arbol, newdata = test[,-2],
+                 type = "class")
+
+# Crear la matriz de confusión
+cm = table(test$bResult, y_pred)
+cm
+
+acc_arbol <- mean(y_pred == test$bResult)
+acc_arbol
+```
+
+Como podemos observar, el modelo acierta bastantes en ambos casos. De hecho, la accuracy de este modelo es de `r acc_arbol` que es muy alta.
+
+El arbol que ha sido creado quedaría de esta forma representado.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+rpart.plot(arbol, type = 3, clip.right.labs = FALSE, branch = .3, under = TRUE)
+```
+
+Vemos que las variables que utiliza para la predicción son *r_tower_tot* y *b_tower_tot*. Si dibujamos los aciertos y los fallos del modelo obtenemos el siguiente gráfico.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+plot_df <- data.frame("bResult_real" = test$bResult, "bResult_predicho" = unname(y_pred))
+
+plot_df %>%
+  ggplot()+
+  geom_jitter(aes(x= bResult_real, y = bResult_predicho), colour = "royalblue4", alpha = 0.7)+
+  xlab("Valor real")+
+  ylab("Valor predicho")+
+  labs(title = "Valor real vs Valor predicho")
+```
+
+Pasamos a realizar la regresión logística, pero antes escalaremos los datos
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+entrenamiento_esc <- entrenamiento
+test_esc <- test
+entrenamiento_esc[, -2] <- scale(entrenamiento_esc[,-2])
+test_esc[, -2] <- scale(test_esc[,-2])
+
+clas_glm = glm(formula = bResult ~ ., 
+                  data = entrenamiento_esc,  
+                 family = binomial)
+
+# Predicción de los resultados con el conjunto de testing
+prob_pred = predict(clas_glm, type = "response",
+                    newdata = test_esc[,-2])
+
+y_pred = ifelse(prob_pred> 0.5, 1, 0)
+
+# Crear la matriz de confusión
+cm = table(test_esc$bResult, y_pred)
+cm
+
+acc_glm <- mean(y_pred == test$bResult)
+```
+
+Si observamos la matriz de confusión, vemos que este modelo acierta más incluso que el arbol anterior. De hecho, tiene una accuracy de `r acc_glm` que es prácticamente 1. Por el momento elegiremos este modelo para la predicción.
+
+Si vemos gráficamente los aciertos y fallos del modelo, observamos lo siguiente.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+plot_df <- data.frame("bResult_real" = test$bResult, "bResult_predicho" = unname(y_pred))
+
+plot_df %>%
+  ggplot()+
+  geom_jitter(aes(x= bResult_real, y = bResult_predicho), colour = "royalblue4", alpha = 0.7)+
+  xlab("Valor real")+
+  ylab("Valor predicho")+
+  labs(title = "Valor real vs Valor predicho")
+```
+
+El último método que vamos a utilizar en este apartado será el método kNN. Con los datos escalados, prodecemos a calcular la predicción y la matriz de confusión.
+
+```{r}
+y_pred = knn(train = entrenamiento_esc[,-2],
+             test = test_esc[,-2],
+             cl = entrenamiento_esc$bResult,
+             k = 5)
+
+cm = table(test_esc$bResult, y_pred)
+cm
+
+acc_knn <- mean(y_pred == test_esc$bResult)
+```
+
+Vemos que este método falla más que los dos anteriores. De hecho, su accuracy es `r acc_knn`. Aunque sea un peor modelo, sigue siendo bastante bueno.
+
+La representación gráfica es la siguiente.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+plot_df <- data.frame("bResult_real" = test$bResult, "bResult_predicho" = unname(y_pred))
+
+plot_df %>%
+  ggplot()+
+  geom_jitter(aes(x= bResult_real, y = bResult_predicho), colour = "royalblue4", alpha = 0.7)+
+  xlab("Valor real")+
+  ylab("Valor predicho")+
+  labs(title = "Valor real vs Valor predicho")
+```
+
+Como conclusión, el modelo que mejor predice nuestros datos es la regresión logística, seguida del arbol de decisión y por ultimo el modelo kNN.
+
+## ACP
+
+Ya que nuestros modelos anteriores utilizan muchas variables (salvo arboles de decisión), lo que haremos será realizar PCA para reducir la dimensionalidad y poder pintar de forma más comoda las predicciones.
+
+```{r}
+pca = preProcess(x = entrenamiento[, -2], method = "pca", pcaComp = 2)
+entrenamiento_acp= predict(pca, entrenamiento)
+test_acp = predict(pca, test)
+```
+
+Utilizaremos lo que hemos obtenido en el PCA para aplicarlo a los modelos SVM y GLM. Comenzamos con el SVM.
+
+```{r}
+# Ajustar el modelo de SVM con el conjunto de entrenamiento.
+class_svm = svm(formula = bResult ~ PC1 + PC2, 
+                 data = entrenamiento_acp,
+                 type = "C-classification",
+                 kernel = "linear")
+
+y_pred = predict(class_svm, newdata = test_acp[,-1])
+
+# Crear la matriz de confusión
+cm = table(test_acp$bResult, y_pred)
+cm
+
+acc_svm_acp <- mean(y_pred == test_acp$bResult)
+acc_svm_acp
+```
+
+Hemos obtenido una accuracy de `r acc_svm_acp`, que, si la comparamos con los modelos de clasificación realizados anteriormente, es menor pero aqui utilizamos menos variables. Veamos la visualización de la clasificación de los datos de entrenamiento.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+#Visualizacion de los datos
+set = entrenamiento_acp
+X1 = seq(min(set[, 2]) - 1, max(set[, 2]) + 1, by = 0.025)
+X2 = seq(min(set[, 3]) - 1, max(set[, 3]) + 1, by = 0.025)
+grid_set = expand.grid(X1, X2)
+colnames(grid_set) = c('PC1', 'PC2')
+y_grid = predict(class_svm, newdata = grid_set)
+plot(set[, -1],
+     main = 'SVM (Conjunto de Entrenamiento)',
+     xlab = 'CP1', ylab = 'CP2',
+     xlim = range(X1), ylim = range(X2))
+contour(X1, X2, matrix(as.numeric(y_grid), length(X1), length(X2)), add = TRUE)
+points(grid_set, pch = '.',  col = ifelse(y_grid == 1, 'springgreen3', 'tomato'))
+points(set[,c(2,3)], pch = 21, bg = ifelse(set[, 1] == 1, 'green4', 'red3'))
+```
+
+Y ahora veamos la visualización de la clasificación de los datos de test.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+#Visualizacion de los datos
+set = test_acp
+X1 = seq(min(set[, 2]) - 1, max(set[, 2]) + 1, by = 0.025)
+X2 = seq(min(set[, 3]) - 1, max(set[, 3]) + 1, by = 0.025)
+grid_set = expand.grid(X1, X2)
+colnames(grid_set) = c('PC1', 'PC2')
+y_grid = predict(class_svm, newdata = grid_set)
+plot(set[, -1],
+     main = 'SVM (Conjunto de Test)',
+     xlab = 'CP1', ylab = 'CP2',
+     xlim = range(X1), ylim = range(X2))
+contour(X1, X2, matrix(as.numeric(y_grid), length(X1), length(X2)), add = TRUE)
+points(grid_set, pch = '.',  col = ifelse(y_grid == 1, 'springgreen3', 'tomato'))
+points(set[,c(2,3)], pch = 21, bg = ifelse(set[, 1] == 1, 'green4', 'red3'))
+```
+
+Podemos observar que estas componentes principales separan y predicen de forma bastante buena los datos, aunque falla un poco en la zona del centro.
+
+Veamos que ocurre si aplicamos glm a lo obtenido del ACP.
+
+```{r}
+#GLM con pca
+class_glm = glm(bResult~ PC1 + PC2, data = entrenamiento_acp, family = "binomial" )
+
+y_probs = predict(class_glm, newdata = test_acp, type = "response")
+# Predicción de los resultados con el conjunto de testing
+
+y_pred = ifelse(y_probs> 0.5, 1,0)
+
+# Crear la matriz de confusión
+cm = table(test_acp$bResult, y_pred)
+cm
+
+acc_glm_acp <- mean(y_pred == test_acp$bResult)
+acc_glm_acp
+
+```
+
+La accurracy es `r acc_glm_acp` que como es comprensible, es menor a la accuracy obtenida con glm sin aplicar componentes principales. Aún así, sigue siendo muy buena. Pasemas a la visualización de los datos del conjunto de entrenamiento.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+set = entrenamiento_acp
+X1 = seq(min(set[, 2]) - 1, max(set[, 2]) + 1, by = 0.01)
+X2 = seq(min(set[, 3]) - 1, max(set[, 3]) + 1, by = 0.01)
+grid_set = expand.grid(X1, X2)
+colnames(grid_set) = c('PC1', "PC2")
+y_grid = predict(class_glm, newdata = grid_set, type = "response")
+y_grid = ifelse(y_grid > 0.5,1,0)
+plot(set[,c(2,3)],
+     main = 'GLM (Conjunto de Entrenamiento)',
+     xlab = 'PC1', ylab = 'PC2',
+     xlim = range(X1), ylim = range(X2))
+contour(X1, X2, matrix(as.numeric(y_grid), length(X1), length(X2)), add = TRUE)
+points(grid_set, pch = '.', col = ifelse(y_grid == 1, 'springgreen3', 'tomato'))
+points(set[, c(2,3)], pch = 21, bg = ifelse(set[, 1] == 1, 'green4', 'red3'))
+```
+
+Y ahora veamos la visualización de los datos de test.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+set = test_acp
+X1 = seq(min(set[, 2]) - 1, max(set[, 2]) + 1, by = 0.01)
+X2 = seq(min(set[, 3]) - 1, max(set[, 3]) + 1, by = 0.01)
+grid_set = expand.grid(X1, X2)
+colnames(grid_set) = c('PC1', "PC2")
+y_grid = predict(class_glm, newdata = grid_set, type = "response")
+y_grid = ifelse(y_grid > 0.5,1,0)
+plot(set[,c(2,3)],
+     main = 'GLM (Conjunto de Test)',
+     xlab = 'PC1', ylab = 'PC2',
+     xlim = range(X1), ylim = range(X2))
+contour(X1, X2, matrix(as.numeric(y_grid), length(X1), length(X2)), add = TRUE)
+points(grid_set, pch = '.', col = ifelse(y_grid == 1, 'springgreen3', 'tomato'))
+points(set[, c(2,3)], pch = 21, bg = ifelse(set[, 1] == 1, 'green4', 'red3'))
+```
+
+Como conclusión podemos decir que utilizar estos los modelos de predicción tras usar PCA es preferible en este caso ya que reducimos considerablemente la dfificultad y estos modelos son bastante buenos.
+
+## Clustering con ACP
+
+Para terminar con este trabajo, realizaremos clustering sobre nuestros datos. Para ello, primero realizamos PCA sobre el total de los datos.
+
+```{r}
+pca_clustering = preProcess(x = datos[, -2], method = "pca", pcaComp = 2)
+datos_pca = predict(pca_clustering, datos)
+```
+
+Utilizaremos k-means para hacer clustering. No utilizamos la regla del codo ya que nuestra intención es que nos separe en 2 grupos (si gana o si pierde). También lo representaremos.
+
+```{r, fig.align="center", fig.width=6, fig.height=6}
+kmeans <- kmeans(datos_pca[,-1], 2, iter.max = 300, nstart = 10)
+
+clusplot(datos_pca[,-1], 
+         kmeans$cluster,
+         lines = 0,
+         shade = TRUE,
+         color = TRUE,
+         labels = 5,
+         plotchar = FALSE,
+         span = TRUE,
+         main = "Clustering de las victorias de los equipos",
+         xlab = "PC1",
+         ylab = "PC2"
+         )
+```
+
+Como podemos observar, existe una intersección entre los clusters en la que se encuentran una gran cantidad de puntos. También decir que en las zonas en las que los dos clusters no intersecan, hay una gran cantidad de puntos.
+
+
+
