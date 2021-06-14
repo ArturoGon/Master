@@ -1,0 +1,113 @@
+---
+title: "Limpieza datos Recetas"
+author: "Arturo González Moya"
+date: "15/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+use_python("/Users/artur/anaconda33/python3") #Hay que cambiarla a la direccion de python de cada usuario
+```
+
+En este documento se encuentra la limpieza de los datos de las recetas. Esta limpieza ha sido extraida de este [link](https://github.com/JoanMartin/UIB-MasterInBigData/blob/master/New-Trend-In-Data-Mining/Association%20Rules/Recipe%20Association%20Rules.ipynb). La limpieza ha sido realizada en python y se ha pasado a R mediante la librería `reticulate`.
+
+Lo primero será cargar los paquetes necesarios para la limpieza.
+
+```{python}
+#py_install("re")
+import re 
+#py_install("xml.etree.ElementTree")
+import xml.etree.ElementTree
+#py_install("nltk")
+import nltk
+nltk.download('stopwords')
+nltk.download('punkt')
+
+from nltk.corpus import stopwords
+
+from nltk.tokenize import RegexpTokenizer
+#py_install("numpy")
+import numpy as np
+#py_install("pandas")
+import pandas as pd
+```
+
+El archivo está en forma de listas, por lo que se separá agrupando en un array los igredientes de las recetas y en otro los nombres de las recetas
+
+```{python}
+e = xml.etree.ElementTree.parse('recipeBaseCompulsory_clean.xml').getroot()
+
+recipe_ingredients = []
+recipe_title = []
+
+for atype in e.findall('RECIPE'):
+    ingredients = []
+    
+    recipe_title.append(atype.find('TI').text)
+    
+    for i in atype.findall('IN'):
+        try:
+            ingredients.append(i.text)
+        except Exception:
+            pass
+    
+    recipe_ingredients.append(ingredients)
+```
+
+Una vez separados se comienza a limpiar los datos y al final, se guardan los nombres de las recetas en el documento *"nombres_recetas.csv"* y los ingredientes se guardan en el documento *"recipe_ingredients_transactions.csv"*
+
+```{python}
+tokenizer = RegexpTokenizer(r'\w+')
+stop_words = stopwords.words("english") 
+stop_words.extend(['ounce', 'skinless', 'boneless', 'halves', 'cold', 'sized',
+                   'cooked', 'unseasoned', 'colored', 'light', 'medium', 'thinly',
+                   'coarsely', 'crushed', 'whole', 'recipe', 'pitted', 'bing'])
+                   
+
+recipe_ingredients_clean = []
+recipe_title_clean = []
+
+for rec_tit in recipe_title:
+    t = rec_tit.lower()
+    words = tokenizer.tokenize(t)
+
+    recipe_title_clean.append(' '.join([word for word in words 
+                                       if word not in stop_words
+                                       and not word.isdigit() 
+                                       and len(word) > 2]))
+
+recipe_title_clean = list(filter(None, recipe_title_clean))
+
+pd.DataFrame(recipe_title_clean).to_csv('nombres_recetas.csv', sep=';', 
+                                              header=False, index=False, na_rep=None)
+
+    
+for rec_ing in recipe_ingredients:
+    ingredients_clean = []
+    
+    for ing in rec_ing:
+        t = ing.lower()
+        t = re.sub("[\(\[].*?[\)\]]", "", t) # Remove brackets
+        t = t.split(',')[0]
+        t = t.split(';')[0]
+        t = t.split(' or ')[0]
+
+        words = tokenizer.tokenize(t)
+
+        ingredients_clean.append(' '.join([word for word in words 
+                                           if word not in stop_words
+                                           and not word.isdigit() 
+                                           and len(word) > 2]))
+        
+    ingredients_clean = list(set(filter(None, ingredients_clean)))
+    recipe_ingredients_clean.append(ingredients_clean)
+    
+pd.DataFrame(recipe_ingredients_clean).to_csv('recipe_ingredients_transactions.csv', sep=';', 
+                                             header=False, index=False, na_rep=None)
+```
+
+
+
+

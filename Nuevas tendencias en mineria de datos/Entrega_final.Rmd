@@ -1,0 +1,624 @@
+---
+title: "Entrega_final"
+author: "Arturo González Moya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: yes
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(mclust)
+library(dbscan)
+library(data.table)
+library(MVN)
+library(DMwR)
+library(Rlof)
+library(arules)
+library(datasets)
+```
+
+# Ejercicio 1
+
+**En este [link](https://projet.liris.cnrs.fr/ccc/) encontraréis los datos de un libro de recetas en formato zip. La tarea consiste en buscar reglas de asociación a partir de estos datos. ¿Es posible encontrar una regla para todas las recetas de pescado? ¿O de recetas picantes? Jugar con los datos, intenta encontrar alguna regla "interesante".**
+
+## Busqueda de reglas de asociación
+
+Una vez se han limpiado los datos desde el documento "Limpieza_Recetas.Rmd", los cargamos en forma de transacción con la función `read.transactions`.
+
+```{r}
+recetas <- read.transactions("recipe_ingredients_transactions.csv", header = FALSE, rm.duplicates = FALSE, sep = ";")
+```
+
+Veamos como son los dos primeros elementos delconjunto de transacciones.
+
+```{r}
+inspect(recetas[1:2]) 
+```
+
+Observemos cuales son los itemsets más frecuentes con un soporte de $0.12$.
+
+```{r}
+frequentItems <- eclat(recetas, parameter = list(support = 0.13))
+inspect(frequentItems)
+```
+
+Vemos que el itemset **salt** es el que mayor soporte tiene. Observemos gáficamente los 15 itemsets más frecuentes.
+
+```{r}
+itemFrequencyPlot(recetas, topN = 15, type="absolute", main="Top 15 Itemset más frecuentes")  
+```
+
+Como hemos dicho antes, el itemset **salt** es el más frecuente. Es seguido por los itemsets **sugar** y **water**. Intentemos ahora determinar reglas de asociación para las recetas de pescado. Para ello haremos una lista con nombres de pescados para seleecionar aquellas que los contengan.
+
+Seleccionaremos los siguientes pescados: *"hake", "shark", "monkfish", "rooster", "cod", "turbot", "sole fish", "fish", "bass", "anchovy", "sardine", "salmon", "mackerel", "herring", "tuna", "golden fish", "trout", "sea bream", "seafood", "snapper", "bluefish", "croaker", "flounder"*.
+
+Tambien limpiaremos el conjunto de datos para el proximo apartado de las recetas picantes. Aqui seleccionaremos las palabras *"red-hot", "spicy", "hot", "peppery", "racy", "piquancy"*.
+
+Lo que haremos será al final guardar en dos documentos diferentes las recetas de pescados y las recetas picantes.
+
+```{r, eval=FALSE}
+lista_pescados <- "hake|shark|monkfish|rooster|cod|turbot|sole fish|fish|bass|anchovy|sardine|salmon|mackerel|herring|tuna|golden fish|trout|sea bream|seafood|snapper|bluefish|croaker|flounder"
+
+lista_picantes <- "red-hot|spicy|hot|peppery|racy|piquancy"
+
+transformacion <- as(recetas, "data.frame") #Pasamos a data frame para la limpieza
+
+transformacion$items <- as.character(transformacion$items) #Convertimos en caracter
+
+transformacion$items <- substr(transformacion$items, 2, nchar(transformacion$items)-1) #Eliminamos las llaves que han aparecido
+
+
+#### Para los pescados
+
+pescados <- filter(transformacion, str_detect(items,lista_pescados)) #Buscamos los nombres de pescados en los ingredientes
+
+pescados <- str_split_fixed(pescados$items, ",", n=Inf) #Separamos los ingredientes en columnas
+
+for (i in 1:nrow(pescados)) { #Cambiamos los elementos vacios por NA
+  for (j in 1:ncol(pescados)) {
+    if (pescados[i,j] == "" ) {
+      pescados[i,j] = NA
+    }
+  }
+}
+
+write.csv(pescados, file = "recetas_pescados.csv", row.names = FALSE, col.names = FALSE) #Guardamos el resultado en un documento .csv
+
+#### Para las picantes
+
+nombres_recetas <- read.csv2("nombres_recetas.csv", header = FALSE) #Cargamos el nombre de las recetas
+
+indices <- which(str_detect(nombres_recetas[,1],lista_picantes)) #Buscamos las que tengas palabras que indiquen comida picante
+
+picantes <- transformacion[indices, ] #Seleccionamos los ingredientes de las recetas picantes
+
+picantes <- str_split_fixed(picantes, ",", n=Inf) #Separamos los ingredientes en columnas
+
+for (i in 1:nrow(picantes)) { #Cambiamos los elementos vacios por NA
+  for (j in 1:ncol(picantes)) {
+    if (picantes[i,j] == "" ) {
+      picantes[i,j] = NA
+    }
+  }
+}
+
+write.csv(picantes, file = "recetas_picantes.csv", row.names = FALSE, col.names = FALSE) #Guardamos el resultado en un documento .csv
+```
+
+Cargamos el conjunto de datos de las recetas de pescados.
+
+```{r}
+recetas_pescados <- read.transactions("recetas_pescados.csv", sep = ",", skip = 1, rm.duplicates = FALSE)
+
+inspect(recetas_pescados[1:2])
+```
+
+Una vez tenemos solo las recetas que contienen pescado, vamos a ver cuales son los itemsets más frecuentes en ellas.
+
+```{r}
+itemFrequencyPlot(recetas_pescados, topN = 15, type="absolute", main="Top 15 Itemset más frecuentes")
+```
+
+Los itemsets más frecuentes son la sal, la matequilla y la cebolla.
+
+Pasamos a buscar reglas de asociación para las recetas de pescados. Consideraremos las reglas con antecedente vacío ya que corresponden a que un ingrediente es pescado.
+
+```{r}
+Grules_pescado <- apriori(recetas_pescados, parameter = list(supp = 0.05, conf = 0.1, minlen=1), control = list (verbose=F))
+Grules_conf_pescado <- sort (Grules_pescado, by="support", decreasing=TRUE)
+inspect(Grules_conf_pescado)
+```
+
+Con un soporte mínimo de $0.05$ y una confianza mínima de $0.1$ hemos obtenido $63$ reglas de asociación. Podemos observar que las primera reglas con mayor soporte son aquellas que el antecedente es vacío. Esto nos dice que las recetas de pescado llevan sal con un soporte de $0.28333333$ y llevan mantequilla con un soporte igual al anterior.
+
+La primera regla con antecedente no vacío y mayor soporte es:
+
+$$
+\mbox{(Si es una receta de pescado y lleva cebolla)} \rightarrow \ \mbox{(Lleva sal)}
+$$
+
+Veamos estas reglas obtenidas pero ordenadas por mayor confianza.
+
+```{r}
+Grules_conf_pescado <- sort (Grules_pescado, by="confidence", decreasing=TRUE)
+inspect(Grules_conf_pescado)
+```
+
+Vemos que las reglas con confianza $1$ son las siguientes:
+
+$$
+\mbox{(Si lleva zumo de limon)} \rightarrow \ \mbox{(Lleva salsa de pescado)} \\
+\mbox{(Si lleva hojas)} \rightarrow \ \mbox{(Lleva mantequilla)} \\
+\mbox{(Si lleva harina y sal)} \rightarrow \ \mbox{(Lleva mantequilla)}
+$$
+
+Destacar de los resultados obtenidos que la sal aparece pocas veces siendo tan utilizada para cocinar.
+
+Pasamos a estudiar las recetas que son picantes. Para ello cargamos el conjunto de datos que hemos creado anteriromente y que contiene solo recetas picantes.
+
+```{r}
+recetas_picantes <- read.transactions("recetas_picantes.csv", sep = ",", skip = 1, rm.duplicates = FALSE)
+
+inspect(recetas_picantes[1:2])
+```
+
+Veamos cuales son los itemsets más frecuentes en estas recetas.
+
+```{r}
+itemFrequencyPlot(recetas_picantes, topN = 15, type="absolute", main="Top 15 Itemset más frecuentes")
+```
+
+Como en el caso anterior, el itemset más frecuente es la sal. Destacar que el segundo itemset más frecuente es el azúcar, que en un principio no parecería que tuviese mucha relación con el picante.
+
+Pasamos a buscar reglas de asociación para las recetas picantes.
+
+```{r}
+Grules_picantes <- apriori(recetas_picantes, parameter = list(supp = 0.05, conf = 0.1, minlen=2), control = list (verbose=F))
+Grules_conf_picantes <- sort (Grules_picantes, by="support", decreasing=TRUE)
+inspect(Grules_conf_picantes[1:30])
+```
+
+Con un soporte mínimo de $0.05$ y una confianza mínima de $0.1$ hemos obtenido $174$ reglas de asociación, aunque solo se muestran $30$. Podemos observar que las reglas con mayor soporte son las siguientes:
+
+$$
+\mbox{(Si lleva azúcar)} \rightarrow \ \mbox{(Lleva agua)} \\
+\mbox{(Si lleva agua)} \rightarrow \ \mbox{(Lleva azúcar)} 
+$$
+
+La primera regla con confianza $1$ es la siguiente:
+
+$$
+\mbox{(Si lleva ajo molido)} \rightarrow \ \mbox{(Lleva agua)}
+$$
+Por último, veamos si podemos encontrar algúna regla interesante para todas la recetas que teníamos inicialmente.
+
+Veamos cuales son los itemsets más frecuentes en estas recetas.
+
+```{r}
+itemFrequencyPlot(recetas, topN = 15, type="absolute", main="Top 15 Itemset más frecuentes")
+```
+
+Los itemsets más frecuentes son la sal, el azúcar y el agua.
+
+Pasamos a buscar reglas de asociación para todas las recetas.
+
+```{r}
+Grules_todas_recetas <- apriori(recetas, parameter = list(supp = 0.05, conf = 0.1, minlen=2), control = list (verbose=F))
+Grules_conf_todas_recetas <- sort (Grules_todas_recetas, by="confidence", decreasing=TRUE)
+inspect(Grules_conf_todas_recetas)
+```
+
+Con un soporte mínimo de $0.05$ y una confianza mínima de $0.1$ hemos obtenido $36$ reglas de asociación. Ignorando las reglas que contienen sal, tenemos que la primera regla con mayor confianza es la siguiente:
+
+$$
+\mbox{(Si lleva vainilla)} \rightarrow \ \mbox{(Lleva azúcar)}
+$$
+
+# Ejercicio 2
+
+**En la UCI machine learning repository (en el siguiente [link](https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/)) encontraréis el dataset "Breast Cancer Wisconsin (Diagnostic) Data Set". Realizar una detección de anomalías usando distintas técnicas.**
+
+## Lectura y estudio de los datos
+
+Lo primero que haremos será cargar los datos.
+
+```{r}
+datos_diagnostic <- read.csv("breast-cancer-wisconsin.data", header = FALSE)
+dim(datos_diagnostic)
+```
+
+Vemos que tenemos 699 datos y 11 variables, a las que renombraremos y seran las siguientes:
+  
+  * *Id*: Número de identificación
+  
+  * *Espesor_Grupo*: Variable numérica que indica el expesor del grupo (rango entre 1 y 10).
+  
+  * *Uniform_tam_celula*: Variable numérica que indica la uniformidad del tamaño de la célula (rango entre 1 y 10).
+  
+  * *Uniform_forma_celula*: Variable numérica que indica la uniformidad la forma de la célula (rango entre 1 y 10).
+  
+  * *Adh_marginal*: Variable numérica que indica la adhesión marginal (rango entre 1 y 10).
+  
+  * *Tam_celula_epi*: Variable numérica que indica el tamaño de una sola célula epitelial (rango entre 1 y 10).
+  
+  * *Nuc_desnudos*: Variable numérica que indica los núcleos desnudos (rango entre 1 y 10).
+  
+  * *Cromatina*:  Variable numérica que indica la cromatina suave (rango entre 1 y 10).
+  
+  * *Nucleolos*:  Variable numérica que indica los nucleolos normales (rango entre 1 y 10).
+  
+  * *Mitosis*:  Variable numérica que indica la mitosis (rango entre 1 y 10).
+  
+  * *Clase*:  Esta es la variable objetivo. Es una variable factor que con $2$ indica que una célula es benigna y con $4$ que una célula es maligna.
+
+```{r}
+names(datos_diagnostic) <- c("Id", "Espesor_Grupo", "Uniform_tam_celula",
+                             "Uniform_forma_celula", "Adh_marginal", "Tam_celula_epi", 
+                             "Nuc_desnudos", "Cromatina", "Nucleolos", "Mitosis", "Clase")
+```
+
+
+Veamos si este conjunto de datos contienen valores perdidos.
+
+```{r}
+str(datos_diagnostic)
+```
+
+Podemos observar que en la variable *Nuc_desnudos* existen valores perdidos. Veamos cuantos son.
+
+```{r}
+nrow(filter(datos_diagnostic, Nuc_desnudos == "?"))
+```
+
+Como no son muchos los valores peridos, lo que haremos será eliminarlos.
+
+```{r}
+datos_diagnostic <- filter(datos_diagnostic, Nuc_desnudos != "?")
+```
+
+Lo que hemos de hacer ahora es pasar a numérico la variable *Nuc_desnudos* que se encontraba como factor y la variable *Clase* la pasaremos a factor.
+
+```{r}
+datos_diagnostic$Nuc_desnudos <- as.numeric(datos_diagnostic$Nuc_desnudos)
+datos_diagnostic$Clase <- as.factor(datos_diagnostic$Clase)
+```
+
+## Detección de anomalías.
+
+Comenzamos con la detección de anomalías eliminando la variable *Id* que no nos será de utilidad durante todo el estudio y la variable *Clase* que la utilizaremos al final.
+
+```{r}
+datos_diagnostic_red <- datos_diagnostic[,-c(1, 11)]
+```
+
+Ya que todas las variables se encuentran en el mismo rango de valores observados, no escalaremos los datos.
+
+Realizaremos ACP para reducir la dimensionalidad y poder dibujar los datos en el plano
+
+```{r}
+datos_acp <- prcomp(datos_diagnostic_red)
+summary(datos_acp)
+```
+
+Hemos obtenido 6 componentes principales. Cada componente explica un porcentaje de la variación total del conjunto de datos. Ya que nuestra intención era disminuir la dimensionalidad para poder representar los datos, lo que haremos será seleccionar las 2 primeras componentes principales.
+
+```{r}
+embedding <- data.table(datos_acp$x[, 1:2], Indices = c(1:nrow(datos_diagnostic_red)))
+
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+    geom_point(size = 10, colour = "steelblue", alpha = 0.3) +
+    geom_text(aes(label = Indices), check_overlap = TRUE) +
+    theme_minimal()
+```
+
+Aquí podemos observar lo que podrían ser posibles outliers (como pueden ser la observación 106 o la observación 441).
+
+Pasamos a utilizar métodos para detectar estos outliers. El primero que utilizaremos será el método DBSCAN. Lo probaremos con diferentes parámetros. Los outliers son aquellos que se encuentran en el cluster 0.
+
+##################### Revisar Parametros #####################
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 5.5, minPts = 3)
+embedding[, DClusters_5.5_3 := dbscan(datos_diagnostic_red, eps = 5.5, minPts = 3)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 5, minPts = 3)
+embedding[, DClusters_5_3 := dbscan(datos_diagnostic_red, eps = 5, minPts = 3)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 5, minPts = 4)
+embedding[, DClusters_5_4 := dbscan(datos_diagnostic_red, eps = 5, minPts = 4)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 5.5, minPts = 4)
+embedding[, DClusters_5.5_4 := dbscan(datos_diagnostic_red, eps = 5.5, minPts = 4)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 6, minPts = 3)
+embedding[, DClusters_6_3 := dbscan(datos_diagnostic_red, eps = 6, minPts = 3)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 6, minPts = 4)
+embedding[, DClusters_6_4 := dbscan(datos_diagnostic_red, eps = 6, minPts = 4)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 6.5, minPts = 3)
+embedding[, DClusters_6.5_3 := dbscan(datos_diagnostic_red, eps = 6.5, minPts = 3)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 6.5, minPts = 4)
+embedding[, DClusters_6.5_4 := dbscan(datos_diagnostic_red, eps = 6.5, minPts = 4)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 6.5, minPts = 2)
+embedding[, DClusters_6.5_2 := dbscan(datos_diagnostic_red, eps = 6.5, minPts = 2)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 7, minPts = 3)
+embedding[, DClusters_7_3 := dbscan(datos_diagnostic_red, eps = 7, minPts = 3)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 7, minPts = 4)
+embedding[, DClusters_7_4 := dbscan(datos_diagnostic_red, eps = 7, minPts = 4)$cluster]
+```
+
+```{r}
+dbscan(datos_diagnostic_red, eps = 7, minPts = 2)
+embedding[, DClusters_7_2 := dbscan(datos_diagnostic_red, eps = 7, minPts = 2)$cluster]
+```
+
+Como podemos observar, dependiendo de los parámetros, podemos considerar 4, 11, 21, 23, 37, 43, 68 o 74 outliers. Veamos los diferentes casos representados gráficamente. El cluster con numeración 0 es el que representa los outliers.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_7_4)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=7 y minPts=4")+
+  labs(color="Clusters")
+```
+
+Vemos que los outliers se encuentran en el interior de las observaciones. 
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_6.5_2)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=6.5 y minPts=2")+
+  labs(color="Clusters")
+```
+
+A los anteriores outliers se han añadido otros como pueden ser el 99 o el 348.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_6_3)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=6 y minPts=3")+
+  labs(color="Clusters")
+```
+
+Vemos que se siguen añadiendo observaciones como outliers a los anteriores (como puede ser la observación 480) pero de momento no se podrían distiguir a simple vista sin el uso de las etiquetas.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_6_4)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=6 y minPts=4")+
+  labs(color="Clusters")
+```
+
+Se ha añadido a los anteriores outliers la observación 232.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_5.5_3)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=5.5 y minPts=3")+
+  labs(color="Clusters")
+```
+
+Vemos que aquí nos separa en dos clusters a parte del cluster de los outliers. El cluster con el número 2, se encuentra en la parte inferior del gráfico, al que pertenece la observación 61.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_5.5_4)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=5.5 y minPts=4")+
+  labs(color="Clusters")
+```
+
+En este caso, la observación 61 que antes no se consideraba outlier y generaba un cluster con otra observación, ahora se considera como outlier.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_5_3)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=5 y minPts=3")+
+  labs(color="Clusters")
+```
+
+Con estos parámetros, se ha añadido como outlier la observación 441 que es la que podíamos pensar que era un outlier a simple vista.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+  geom_point(aes(colour = factor(DClusters_5_4)), size = 10, alpha = 0.3) +
+  geom_text(aes(label = Indices), check_overlap = TRUE) +
+  theme_minimal() + 
+  ggtitle("DBSCAN con eps=5 y minPts=4")+
+  labs(color="Clusters")
+```
+
+Se añaden algunos outliers en la parte inferior a los anteriormentes considerados.
+
+Pasamos a utilizar el método de Maximización de expectativas (Expectation Maximization). Lo probaremos con 3,4 y 6 clusters.
+
+```{r}
+#Mclust
+mclust <- Mclust(datos_diagnostic_red, G = 4)
+
+embedding[, EMClusters_4 := mclust$classification]
+
+mclust <- Mclust(datos_diagnostic_red, G = 3)
+
+embedding[, EMClusters_3 := mclust$classification]
+
+mclust <- Mclust(datos_diagnostic_red, G = 6)
+
+embedding[, EMClusters_6 := mclust$classification]
+```
+
+Veamos gráficamente los resultados. Los outliers son aquellos que se encuentran en el cluster 1.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+geom_point(aes(colour = factor(EMClusters_4)), size = 10, alpha = 0.3) +
+geom_text(aes(label = Indices), check_overlap = TRUE) +
+theme_minimal()+
+scale_color_manual(values=c("black", "turquoise1","green", "yellow"))+ 
+ggtitle("EM con 4 clusters")+
+labs(color="Clusters")
+```
+
+Los outliers considerados se encuentran a la derecha del gráfico, lo que parece poco coherente ya que ese gran grupo podría considerarse como un cluster.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+geom_point(aes(colour = factor(EMClusters_3)), size = 10, alpha = 0.3) +
+geom_text(aes(label = Indices), check_overlap = TRUE) +
+theme_minimal()+
+ggtitle("EM con 3 clusters")+
+labs(color="Clusters")
+```
+
+Igual que en el caso anterior, los outliers los selecciona de la parte deecha del gráfico.
+
+```{r}
+ggplot(embedding, aes(x = PC1, y = PC2)) +
+geom_point(aes(colour = factor(EMClusters_6)), size = 10, alpha = 0.3) +
+geom_text(aes(label = Indices), check_overlap = TRUE) +
+theme_minimal()+
+scale_color_manual(values=c("black", "turquoise1","green", "yellow", "red", "orange"))+ 
+ggtitle("EM con 6 clusters")+
+labs(color="Clusters")
+```
+
+En este caso ocurre igual que con los anteriores utilizando el método EM.
+
+Por último, utilizaremos el método LOF. Este método se basa en la densidad para detectar los outliers. Lo ejecutaremos con diferentes numeros de vecinos, que será de 3 a 8.
+
+```{r}
+outlier.scores <- lof(datos_diagnostic_red, k=c(3:8))
+```
+
+
+Seleccionaremos las 10 observaciones que tengan un índice de outlier más grande en cada ejecución.
+
+```{r}
+outliers = matrix(rep(0, 60), nrow =10 , ncol = 6)
+for (i in 1:6) {
+  outliers[,i] <- order(outlier.scores[,i], decreasing=TRUE)[1:10]
+}
+
+outliers
+```
+
+Podemos ver que con este método, las observaciones 7, 8 y 10 son outliers en todos los casos.
+
+Una vez que hemos aplicado varios métodos para detectar outliers, vamos a añadir las etiquetas y ver si de verdad pueden ser outliers o no.
+
+```{r}
+data <- data.table(datos_acp$x[, 1:2], Indices = c(1:nrow(datos_diagnostic_red)), Clase = datos_diagnostic$Clase)
+
+ggplot(data, aes(x = PC1, y = PC2)) +
+    geom_point(mapping = aes(color= Clase) ,size = 10, alpha = 0.3) +
+    geom_text(aes(label = Indices), check_overlap = TRUE) +
+    theme_minimal()
+```
+
+Aquí podemos ver representados los datos utilizando componentes principales donde el color representa la clase a la que pertenecen. Viendo esto y relacionandolo con los diferentes métodos empleados para detectar los outliers, se ha decidido escoger el método DBSCAN con parámetros eps=5 y minPts=3. Veamos gráficamente cuáles son los outliers que ha escogido este método utilizando el color para representar la clase a la que pertenecen.
+
+```{r}
+embedding[, Clase := datos_diagnostic$Clase]
+dbscan_outliers = which(embedding$DClusters_5_3==0)
+
+ggplot(embedding[dbscan_outliers,], aes(x = PC1, y = PC2)) +
+    geom_point(mapping = aes(color= Clase) ,size = 10, alpha = 0.3) +
+    geom_text(aes(label = Indices), check_overlap = TRUE) +
+    theme_minimal()
+```
+
+Observamos que este método a escogido observaciones como la 441 o 106 que podrían considerarse outliers a simple vista, pero tambien ha recogido observaciones como la 420 o la 307 que no podrían verse como outliers pero que lo son si consideramos la clase a la que pertenecen. Es por esto que se ha escogido este método con respecto a los otros.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
